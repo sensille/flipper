@@ -1,7 +1,10 @@
 `timescale 1ns / 1ps
 `default_nettype none
 
-module flipper (
+module flipper #(
+	parameter NENDSTOP = 8,
+	parameter BAUD = 9600
+) (
 	input wire clk_50mhz,
 
 	output wire led,
@@ -22,7 +25,7 @@ module flipper (
 	output wire [5:0] step,
 
 	// endstops
-	input wire [7:0] endstop,
+	input wire [NENDSTOP-1:0] endstop,
 
 	// control
 	output wire fan_hotend,
@@ -36,8 +39,19 @@ module flipper (
 	// LED matrix
 	output wire leds_out,
 	output wire leds_clk,
-	output wire leds_cs
+	output wire leds_cs,
+
+	// direct debug
+	output wire debug1,
+	output wire debug2,
+	output wire debug3,
+	output wire debug4
 );
+
+assign debug1 = 0;
+assign debug2 = 0;
+assign debug3 = 0;
+assign debug4 = 0;
 
 wire clk;
 clk u_clk(
@@ -63,10 +77,10 @@ wire [7:0] msg_data;
 wire msg_ready;
 reg msg_rd_en = 0;
 framing #(
-	.BAUD(9600),
+	.BAUD(BAUD),
 	.RING_BITS(8),
 	.HZ(20000000)
-) (
+) u_framing (
 	.clk(clk),
 
 	.rx(rx),
@@ -81,7 +95,7 @@ framing #(
 	.msg_rd_en(msg_rd_en),
 
 	/* reset */
-	.clr(0)
+	.clr(1'b0)
 );
 
 reg [31:0] led_cnt = 0;

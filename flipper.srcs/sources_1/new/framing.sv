@@ -27,9 +27,10 @@ localparam RING_SIZE = 1 << RING_BITS;
 
 /*
  * sync rx into our clk domain
+ * Initialize to one (idle)
  */
-reg rx_s1 = 0;
-reg rx_sync = 0;
+reg rx_s1 = 1;
+reg rx_sync = 1;
 always @(posedge clk) begin
 	rx_s1 <= rx;
 	rx_sync <= rx_s1;
@@ -78,7 +79,6 @@ reg [7:0] recv_crc2 = 0;
 reg [7:0] recv_len = 0;
 reg [7:0] recv_seq = 0;
 reg [3:0] recv_next_seq = 0;
-reg [2:0] recv_state;
 localparam RST_SOF = 3'd0;	/* start of frame (== len byte) */
 localparam RST_SEQ = 3'd1;	/* read sequence byte */
 localparam RST_DATA = 3'd2;	/* read data */
@@ -86,6 +86,7 @@ localparam RST_CRC1 = 3'd3;	/* read crc1 */
 localparam RST_CRC2 = 3'd4;	/* read crc2 */
 localparam RST_EOF = 3'd5;	/* read sync byte (end of frame) */
 localparam RST_NEED_SYNC = 3'd6;/* lost sync, error state */
+reg [2:0] recv_state = RST_SOF;
 
 assign cts = (recv_rptr == recv_temp_wptr + 1'b1);
 
@@ -112,7 +113,8 @@ always @(posedge clk) begin
 				recv_len <= rx_data;
 				crc16_in <= rx_data;
 				crc16_cnt <= 8;
-				crc16 <= 0;
+				crc16 <= 16'hffff;
+				//crc16 <= 16'h0000;
 				recv_temp_wptr <= recv_wptr;
 			end
 		end else if (recv_state == RST_SEQ) begin
@@ -124,12 +126,12 @@ always @(posedge clk) begin
 			crc16_in <= rx_data;
 			crc16_cnt <= 8;
 		end else if (recv_state == RST_DATA) begin
-			recv_wptr <= recv_wptr + 1'b1;
-			recv_ring[recv_wptr] <= rx_data;
+			recv_temp_wptr <= recv_temp_wptr + 1'b1;
+			recv_ring[recv_temp_wptr] <= rx_data;
 			recv_len <= recv_len - 1;
 			crc16_in <= rx_data;
 			crc16_cnt <= 8;
-			if (recv_len == 5) begin
+			if (recv_len == 6) begin
 				recv_state <= RST_CRC1;
 			end
 		end else if (recv_state == RST_CRC1) begin
@@ -162,12 +164,13 @@ always @(posedge clk) begin
 		end
 	end
 	if (crc16_cnt != 0) begin
-		crc16 <= { 1'b0, crc16[15:1] };
-		crc16[15] <= crc16_in[0] ^ crc16[0];
-		crc16[13] <= crc16[14] ^ crc16_in[0] ^ crc16[0];
-		crc16[0] <= crc16[1] ^ crc16_in[0] ^ crc16[0];
+		/* crc16 CCITT */
+		crc16 <= { crc16[14:0], 1'b0 };
+		crc16[12] <= crc16[11] ^ crc16_in[7] ^ crc16[15];
+		crc16[5] <= crc16[4] ^ crc16_in[7] ^ crc16[15];
+		crc16[0] <= crc16_in[7] ^ crc16[15];
 		crc16_cnt <= crc16_cnt - 1'b1;
-		crc16_in <= { 1'b0, crc16_in[7:1] };
+		crc16_in <= { crc16_in[6:0], 1'b0 };
 	end
 
 	/* read interface */
