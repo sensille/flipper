@@ -106,6 +106,15 @@ initial begin: B_serial_data
 	send(8'h8b);
 	send(8'h7e);
 	#(BITLENGTH * 10);
+	send(8'h08);
+	send(8'h11);
+	send(8'h21);
+	send(8'h22);
+	send(8'h23);
+	send(8'hbb);
+	send(8'h41);
+	send(8'h7e);
+	#(BITLENGTH * 10);
 end
 
 endmodule

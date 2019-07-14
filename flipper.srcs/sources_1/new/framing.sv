@@ -90,6 +90,7 @@ reg [2:0] recv_state = RST_SOF;
 
 assign cts = (recv_rptr == recv_temp_wptr + 1'b1);
 
+reg send_acknak = 0;
 /*
  * packet receive state machine
  */
@@ -108,6 +109,7 @@ always @(posedge clk) begin
 			end else if (rx_data < 5 || rx_data >= 64) begin
 				/* bad len, go hunting for sync byte */
 				recv_state <= RST_NEED_SYNC;
+				send_acknak <= 1;
 			end else begin
 				recv_state <= RST_SEQ;
 				recv_len <= rx_data;
@@ -157,10 +159,11 @@ always @(posedge clk) begin
 				recv_wptr <= recv_temp_wptr;
 				recv_next_seq <= recv_seq + 1'b1;
 			end
-			
+			send_acknak <= 1;
 		end else if (recv_state == RST_EOF) begin
 			/* missing EOF, discard */
 			recv_state <= RST_NEED_SYNC;
+			send_acknak <= 1;
 		end
 	end
 	if (crc16_cnt != 0) begin
@@ -181,6 +184,83 @@ always @(posedge clk) begin
 	/* reset */
 	if (clr)
 		recv_wptr <= 0;
+end
+
+reg [7:0] send_crc16_in = 0;
+reg [3:0] send_crc16_cnt = 0;
+reg [15:0] send_crc16 = 0;
+reg [7:0] send_crc1 = 0;
+reg [7:0] send_crc2 = 0;
+reg [7:0] send_len = 0;
+reg [3:0] send_seq = 0;
+localparam SST_IDLE = 3'd0;
+localparam SST_SOF = 3'd1;	/* start of frame (== len byte) */
+localparam SST_SEQ = 3'd2;	/* read sequence byte */
+localparam SST_DATA = 3'd3;	/* read data */
+localparam SST_CRC1 = 3'd4;	/* read crc1 */
+localparam SST_CRC2 = 3'd5;	/* read crc2 */
+localparam SST_EOF = 3'd6;	/* read sync byte (end of frame) */
+reg [2:0] send_state = RST_SOF;
+/*
+ * send state machine
+ */
+always @(posedge clk) begin
+	if (!tx_transmitting && !tx_en) begin
+		if (send_state == SST_IDLE && send_acknak) begin
+			send_acknak <= 0;
+			send_state <= SST_SOF;
+			send_len <= 8'd5;
+			send_seq <= recv_next_seq;
+		end else if (send_state == SST_SOF) begin
+			send_state <= SST_SEQ;
+			tx_data <= send_len;
+			tx_en <= 1;
+			send_crc16_in <= send_len;
+			send_crc16_cnt <= 8;
+		end else if (send_state == SST_SEQ) begin
+			tx_data <= { 4'b001, send_seq };
+			tx_en <= 1;
+			send_crc16_in <= { 4'b001, send_seq };
+			send_crc16_cnt <= 8;
+			if (send_len != 5) begin
+				send_state <= SST_DATA;
+			end else begin
+				send_state <= SST_CRC1;
+			end
+		end else if (send_state == SST_DATA) begin
+			tx_data <= { 4'b0001, send_seq };
+			tx_en <= 1;
+			send_crc16_in <= { 4'b0001, send_seq };
+			send_crc16_cnt <= 8;
+			send_state <= SST_CRC1;
+		end else if (send_state == SST_CRC1) begin
+			tx_data <= send_crc16[15:8];
+			tx_en <= 1;
+			send_state <= SST_CRC2;
+		end else if (send_state == SST_CRC2) begin
+			tx_data <= send_crc16[7:0];
+			tx_en <= 1;
+			send_state <= SST_EOF;
+		end else if (send_state == SST_EOF) begin
+			tx_data <= RECV_EOF_CHAR;
+			tx_en <= 1;
+			send_state <= SST_IDLE;
+		end
+	end
+	if (tx_en) begin
+		tx_en <= 0;
+	end
+	if (send_crc16_cnt != 0) begin
+		/* crc16 CCITT */
+		send_crc16 <= { send_crc16[14:0], 1'b0 };
+		send_crc16[12] <= send_crc16[11] ^ send_crc16_in[7] ^
+			send_crc16[15];
+		send_crc16[5] <= send_crc16[4] ^ send_crc16_in[7] ^
+			send_crc16[15];
+		send_crc16[0] <= send_crc16_in[7] ^ send_crc16[15];
+		send_crc16_cnt <= send_crc16_cnt - 1'b1;
+		send_crc16_in <= { send_crc16_in[6:0], 1'b0 };
+	end
 end
 
 endmodule
