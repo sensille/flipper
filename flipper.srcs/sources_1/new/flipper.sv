@@ -75,11 +75,25 @@ assign step = 0;
 
 wire [7:0] msg_data;
 wire msg_ready;
-reg msg_rd_en = 0;
+wire msg_rd_en;
+/* max length of a packet MCU -> host */
+localparam LEN_BITS = 6;
+/* address width of fifo */
+localparam LEN_FIFO_BITS = 5;
+/* size of receive ring (2^x) */
+localparam RING_BITS = 8;
+localparam CMD_ACKNAK = 8'h7b;
+wire [LEN_BITS-1:0] send_fifo_data;
+wire send_fifo_wr_en;
+wire [7:0] send_ring_data;
+wire send_ring_wr_en;
 framing #(
 	.BAUD(BAUD),
-	.RING_BITS(8),
-	.HZ(20000000)
+	.RING_BITS(RING_BITS),
+	.LEN_BITS(LEN_BITS),
+	.LEN_FIFO_BITS(LEN_FIFO_BITS),
+	.HZ(20000000),
+        .CMD_ACKNAK(CMD_ACKNAK)
 ) u_framing (
 	.clk(clk),
 
@@ -94,8 +108,47 @@ framing #(
 	.msg_ready(msg_ready),
 	.msg_rd_en(msg_rd_en),
 
+	/*
+	 * send side
+	 */
+	.send_fifo_wr_en(send_fifo_wr_en),
+	.send_fifo_data(send_fifo_data),
+	.send_fifo_full(),
+
+	/* ring buffer input */
+	.send_ring_data(send_ring_data),
+	.send_ring_wr_en(send_ring_wr_en),
+	.send_ring_full(),
+
 	/* reset */
 	.clr(1'b0)
+);
+
+command #(
+	.LEN_BITS(LEN_BITS),
+	.LEN_FIFO_BITS(LEN_FIFO_BITS),
+        .CMD_ACKNAK(CMD_ACKNAK)
+) u_command (
+	.clk(clk),
+
+	/*
+	 * receive side
+	 */
+	.msg_data(msg_data),
+	.msg_ready(msg_ready),
+	.msg_rd_en(msg_rd_en),
+
+	/*
+	 * send side
+	 */
+	.send_fifo_wr_en(send_fifo_wr_en),
+	.send_fifo_data(send_fifo_data),
+	.send_fifo_full(),
+
+	/* ring buffer input */
+	.send_ring_data(send_ring_data),
+	.send_ring_wr_en(send_ring_wr_en),
+	.send_ring_full()
 );
 
 reg [31:0] led_cnt = 0;

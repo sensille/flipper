@@ -4,7 +4,10 @@
 module framing #(
 	parameter BAUD = 9600,
 	parameter RING_BITS = 8,
-	parameter HZ = 20000000
+	parameter LEN_BITS = 8,
+	parameter LEN_FIFO_BITS = 7,
+	parameter HZ = 20000000,
+	parameter CMD_ACKNAK = 8'hff
 ) (
 	input wire clk,
 
@@ -18,6 +21,18 @@ module framing #(
 	output wire [7:0] msg_data,
 	output wire msg_ready,
 	input wire msg_rd_en,
+
+	/*
+	 * send side
+	 */
+	input wire send_fifo_wr_en,
+	input wire [LEN_BITS-1:0] send_fifo_data,
+	output wire send_fifo_full,
+
+	/* ring buffer input */
+	input wire [7:0] send_ring_data,
+	input wire send_ring_wr_en,
+	output wire send_ring_full,
 
 	/* reset */
 	input wire clr
@@ -175,6 +190,16 @@ always @(posedge clk) begin
 		crc16_cnt <= crc16_cnt - 1'b1;
 		crc16_in <= { crc16_in[6:0], 1'b0 };
 	end
+	/*
+	 * enqueue acknak after message
+	 */
+	if (send_acknak) begin
+		recv_ring[recv_wptr] <= CMD_ACKNAK;
+		recv_wptr <= recv_wptr + 1'b1;
+		/* needed for cts generation */
+		recv_temp_wptr <= recv_wptr + 1'b1;
+		send_acknak <= 0;
+	end
 
 	/* read interface */
 	if (msg_rd_en && msg_ready) begin
@@ -186,12 +211,51 @@ always @(posedge clk) begin
 		recv_wptr <= 0;
 end
 
+/*
+ * send side
+ */
+wire [LEN_BITS-1:0] send_fifo_rd_data;
+reg send_fifo_rd_en = 0;
+wire send_fifo_empty;
+fifo #(
+	.DATA_WIDTH(LEN_BITS),
+	.ADDR_WIDTH(LEN_FIFO_BITS)
+) send_len_fifo (
+	.clk(clk),
+	.clr(1'b0),
+
+	// write side
+	.din(send_fifo_data),
+	.wr_en(send_fifo_wr_en),
+	.full(send_fifo_full),
+
+	// read side
+	.dout(send_fifo_rd_data),
+	.rd_en(send_fifo_rd_en),
+	.empty(send_fifo_empty),
+
+	// status
+	.elemcnt()
+);
+
+reg [7:0] send_ring [RING_SIZE-1:0];
+reg [RING_BITS-1:0] send_rptr = 0;
+reg [RING_BITS-1:0] send_wptr = 0;
+assign send_ring_full = (send_wptr + 1'b1) == send_rptr;
+
+always @(posedge clk) begin
+	if (send_ring_wr_en && !send_ring_full) begin
+		send_ring[send_wptr] <= send_ring_data;
+		send_wptr <= send_wptr + 1'b1;
+	end
+end
+
 reg [7:0] send_crc16_in = 0;
 reg [3:0] send_crc16_cnt = 0;
 reg [15:0] send_crc16 = 0;
 reg [7:0] send_crc1 = 0;
 reg [7:0] send_crc2 = 0;
-reg [7:0] send_len = 0;
+reg [LEN_BITS-1:0] send_len = 0;
 reg [3:0] send_seq = 0;
 localparam SST_IDLE = 3'd0;
 localparam SST_SOF = 3'd1;	/* start of frame (== len byte) */
@@ -201,16 +265,17 @@ localparam SST_CRC1 = 3'd4;	/* read crc1 */
 localparam SST_CRC2 = 3'd5;	/* read crc2 */
 localparam SST_EOF = 3'd6;	/* read sync byte (end of frame) */
 reg [2:0] send_state = RST_SOF;
+
 /*
  * send state machine
  */
 always @(posedge clk) begin
 	if (!tx_transmitting && !tx_en) begin
-		if (send_state == SST_IDLE && send_acknak) begin
-			send_acknak <= 0;
+		if (send_state == SST_IDLE && !send_fifo_empty) begin
 			send_state <= SST_SOF;
-			send_len <= 8'd5;
+			send_len <= send_fifo_rd_data + 8'd5;
 			send_seq <= recv_next_seq;
+			send_fifo_rd_en <= 1;
 		end else if (send_state == SST_SOF) begin
 			send_state <= SST_SEQ;
 			tx_data <= send_len;
@@ -249,6 +314,9 @@ always @(posedge clk) begin
 	end
 	if (tx_en) begin
 		tx_en <= 0;
+	end
+	if (send_fifo_rd_en) begin
+		send_fifo_rd_en <= 0;
 	end
 	if (send_crc16_cnt != 0) begin
 		/* crc16 CCITT */
