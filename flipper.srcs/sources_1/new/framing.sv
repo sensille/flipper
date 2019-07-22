@@ -293,11 +293,15 @@ always @(posedge clk) begin
 				send_state <= SST_CRC1;
 			end
 		end else if (send_state == SST_DATA) begin
-			tx_data <= { 4'b0001, send_seq };
+			tx_data <= send_ring[send_rptr];
 			tx_en <= 1;
-			send_crc16_in <= { 4'b0001, send_seq };
+			send_crc16_in <= send_ring[send_rptr];
 			send_crc16_cnt <= 8;
-			send_state <= SST_CRC1;
+			send_rptr <= send_rptr + 1;
+			send_len <= send_len - 1;
+			if (send_len == 6) begin
+				send_state <= SST_CRC1;
+			end
 		end else if (send_state == SST_CRC1) begin
 			tx_data <= send_crc16[15:8];
 			tx_en <= 1;

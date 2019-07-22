@@ -115,6 +115,36 @@ initial begin: B_serial_data
 	send(8'h41);
 	send(8'h7e);
 	#(BITLENGTH * 10);
+	send(8'h0a);
+	send(8'h12);
+	// identify
+	send(8'h01);
+	// 3e6fd
+	// 1 00 01111 1 1001101 0 1111101
+	// 1 00 0111110011011111101
+	// 1 00 011 1110 0110 1111 1101
+	send(8'h8f);
+	send(8'hcd);
+	send(8'h7d);
+	// 25
+	send(8'h25);
+	send(8'h5e);
+	send(8'ha7);
+	send(8'h7e);
+	#(BITLENGTH * 10);
+	send(8'h09);
+	send(8'h13);
+	// identify
+	send(8'h01);
+	// 490 == 0x1ea
+	// 00011 1101010
+	send(8'h83);
+	send(8'h6a);
+	send(8'h30);
+	send(8'h6a);
+	send(8'h76);
+	send(8'h7e);
+	#(BITLENGTH * 10);
 end
 
 endmodule
