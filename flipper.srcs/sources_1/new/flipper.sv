@@ -48,8 +48,8 @@ module flipper #(
 	output wire debug4
 );
 
-assign debug1 = 0;
-assign debug2 = 0;
+assign debug1 = rx;
+assign debug2 = tx;
 assign debug3 = 0;
 assign debug4 = 0;
 
@@ -158,7 +158,8 @@ assign led = led_cnt[22];
 
 wire [255:0] leds;
 
-assign leds[31:0] = 0;
+assign leds[1:0] = { rx, tx };
+assign leds[31:2] = 0;
 assign leds[54:32] = 0;
 assign leds[63:57] = 0;
 assign leds[223:72] = 0;

@@ -42,9 +42,14 @@ set_property -dict {PACKAGE_PIN N1 IOSTANDARD LVCMOS33} [get_ports leds_cs]
 set_property -dict {PACKAGE_PIN M2 IOSTANDARD LVCMOS33} [get_ports leds_out]
 set_property -dict {PACKAGE_PIN M1 IOSTANDARD LVCMOS33} [get_ports leds_clk]
 
-set_property -dict {PACKAGE_PIN P5 IOSTANDARD LVCMOS33} [get_ports {rx} ]
-set_property -dict {PACKAGE_PIN R6 IOSTANDARD LVCMOS33} [get_ports {tx} ]
-set_property -dict {PACKAGE_PIN N6 IOSTANDARD LVCMOS33} [get_ports {cts} ]
+set_property -dict {PACKAGE_PIN N6 IOSTANDARD LVCMOS33} [get_ports rx]
+set_property -dict {PACKAGE_PIN M6 IOSTANDARD LVCMOS33} [get_ports tx]
+set_property -dict {PACKAGE_PIN L5 IOSTANDARD LVCMOS33} [get_ports cts]
+
+set_property -dict {PACKAGE_PIN J3 IOSTANDARD LVCMOS33} [get_ports debug1]
+set_property -dict {PACKAGE_PIN K3 IOSTANDARD LVCMOS33} [get_ports debug2]
+set_property -dict {PACKAGE_PIN L4 IOSTANDARD LVCMOS33} [get_ports debug3]
+set_property -dict {PACKAGE_PIN N3 IOSTANDARD LVCMOS33} [get_ports debug4]
 
 create_clock -period 20.000 [get_ports clk_50mhz]
 

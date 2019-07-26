@@ -5,7 +5,8 @@ module command #(
 	parameter RING_BITS = 8,
 	parameter LEN_BITS = 8,
 	parameter LEN_FIFO_BITS = 7,
-	parameter CMD_ACKNAK = 8'hff
+	parameter CMD_ACKNAK = 8'hff,
+	parameter MOVE_COUNT = 64
 ) (
 	input wire clk,
 
@@ -31,6 +32,9 @@ module command #(
 
 localparam RSP_IDENTIFY = 0;
 localparam CMD_IDENTIFY = 1;
+localparam CMD_GET_CONFIG = 2;
+localparam RSP_GET_CONFIG = 3;
+localparam CMD_FINALIZE_CONFIG = 4;
 localparam MST_IDLE = 0;
 localparam MST_PARSE_ARG_START = 1;
 localparam MST_PARSE_ARG_CONT = 2;
@@ -39,7 +43,11 @@ localparam MST_PARAM = 4;
 localparam MST_PARAM_SKIP = 5;
 localparam MST_PARAM_SEND = 6;
 localparam MST_IDENTIFY_SEND = 7;
-reg [2:0] msg_state = 0;
+localparam MST_GET_CONFIG_1 = 8;
+localparam MST_GET_CONFIG_2 = 9;
+localparam MST_GET_CONFIG_3 = 10;
+localparam MST_GET_CONFIG_4 = 11;
+reg [3:0] msg_state = 0;
 reg [7:0] msg_cmd = 0;	/* TODO: correct size */
 localparam MAX_ARGS = 8;
 reg [31:0] args[MAX_ARGS];
@@ -52,6 +60,13 @@ reg [7:0] identify_mem[0:499];
 initial begin
 	$readmemh("identify.mem", identify_mem);
 end
+
+/*
+ * global state
+ */
+reg [31:0] config_crc = 0;
+reg is_finalized = 0;
+reg is_shutdown = 0;
 
 localparam MAX_PARAMS = 8;
 localparam MAX_PARAM_BITS = $clog2(MAX_PARAMS);
@@ -71,6 +86,9 @@ always @(posedge clk) begin
 	if (send_fifo_wr_en) begin
 		send_fifo_wr_en <= 0;
 	end
+	/*
+	 * stage 1, parse arguments, decode VLQ
+	 */
 	if (msg_ready && !msg_rd_en) begin
 		_arg_end = 0;
 		msg_rd_en <= 1;
@@ -82,7 +100,12 @@ always @(posedge clk) begin
 				/* state stays at MST_IDLE */
 			end else if (msg_data == CMD_IDENTIFY) begin
 				msg_state <= MST_PARSE_ARG_START;
-				arg_cnt <= 1;
+				arg_cnt <= 1; /* minus 1 */
+			end else if (msg_data == CMD_GET_CONFIG) begin
+				msg_state <= MST_DISPATCH;
+			end else if (msg_data == CMD_FINALIZE_CONFIG) begin
+				msg_state <= MST_PARSE_ARG_START;
+				arg_cnt <= 0;
 			end
 		end else if (msg_state == MST_PARSE_ARG_START) begin
 			args[arg_cnt] <= msg_data[6:0];
@@ -109,6 +132,9 @@ always @(posedge clk) begin
 			end
 		end
 	end
+	/*
+	 * stage 2, dispatch message
+	 */
 	if (msg_state == MST_DISPATCH) begin
 		if (msg_cmd == CMD_IDENTIFY) begin
 			/*
@@ -121,11 +147,18 @@ always @(posedge clk) begin
 			end else begin
 				params[0] <= args[0];
 			end
-			nparams <= 0;
+			nparams <= 0;	/* minus one */
 			msg_state <= MST_PARAM;
 			send_ring_data <= RSP_IDENTIFY;
 			send_ring_wr_en <= 1;
 			rsp_len <= 1;
+		end else if (msg_cmd == CMD_GET_CONFIG) begin
+			msg_state <= MST_GET_CONFIG_1;
+		end else if (msg_cmd == CMD_FINALIZE_CONFIG) begin
+			/* TODO: check if already finalized */
+			config_crc <= args[0];
+			is_finalized <= 1;
+			msg_state <= MST_GET_CONFIG_1;
 		end else begin
 			msg_state <= MST_IDLE;
 		end
@@ -158,11 +191,11 @@ always @(posedge clk) begin
 		if (curr_cnt == 0) begin
 			if (nparams != 0) begin
 				nparams <= nparams - 1;
-				msg_state <= MST_PARAM_SKIP;
+				msg_state <= MST_PARAM;
 			end else if (msg_cmd == CMD_IDENTIFY) begin
 				msg_state <= MST_IDENTIFY_SEND;
 			end else begin
-				send_fifo_data <= rsp_len;
+				send_fifo_data <= rsp_len + 1;
 				send_fifo_wr_en <= 1;
 				msg_state <= MST_IDLE;
 			end
@@ -175,6 +208,9 @@ always @(posedge clk) begin
 		rsp_len <= rsp_len + 1;
 		curr_cnt <= curr_cnt - 1;
 		curr_param <= { curr_param[27:0], 7'b0 };
+	/*
+	 * continuation of identify
+	 */
 	end else if (msg_state == MST_IDENTIFY_SEND) begin
 		if (params[0] == 0) begin
 			send_fifo_data <= rsp_len;
@@ -187,6 +223,26 @@ always @(posedge clk) begin
 			rsp_len <= rsp_len + 1;
 			params[0] <= params[0] - 1;
 		end
+	/*
+	 * continuation of get_config, also in response to
+	 * finalize_config
+	 */
+	end else if (msg_state == MST_GET_CONFIG_1) begin
+		send_ring_data <= RSP_GET_CONFIG;
+		send_ring_wr_en <= 1;
+		rsp_len <= 1;
+		params[3] <= is_finalized;
+		msg_state <= MST_GET_CONFIG_2;
+	end else if (msg_state == MST_GET_CONFIG_2) begin
+		params[2] <= config_crc;
+		msg_state <= MST_GET_CONFIG_3;
+	end else if (msg_state == MST_GET_CONFIG_3) begin
+		params[1] <= MOVE_COUNT;
+		msg_state <= MST_GET_CONFIG_4;
+	end else if (msg_state == MST_GET_CONFIG_4) begin
+		params[0] <= is_shutdown;
+		nparams <= 3;	/* minus one */
+		msg_state <= MST_PARAM;
 	end
 end
 

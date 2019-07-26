@@ -144,6 +144,31 @@ initial begin: B_serial_data
 	send(8'h6a);
 	send(8'h76);
 	send(8'h7e);
+	#(BITLENGTH * 200);
+	send(8'h06);
+	send(8'h14);
+	// get_config
+	send(8'h02);
+	send(8'h91);
+	send(8'hc9);
+	send(8'h7e);
+	#(BITLENGTH * 10);
+	send(8'h0b);
+	send(8'h15);
+	// set_config, crc = 0x3e
+	// 0001101 0101100 0011001 0111010 1111010
+	// 000 1101 0101  1000 0110  0101 1101  0111 1010
+	//      d    5      8    6    5    d      7   a
+	//      0xd5865d7a
+	send(8'h04);
+	send(8'h8d);
+	send(8'hac);
+	send(8'h99);
+	send(8'hba);
+	send(8'h7a);
+	send(8'hc1);
+	send(8'hb1);
+	send(8'h7e);
 	#(BITLENGTH * 10);
 end
 
