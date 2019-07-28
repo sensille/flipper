@@ -102,8 +102,8 @@ initial begin: B_serial_data
 	send(8'h10);
 	send(8'haa);
 	send(8'hbb);
-	send(8'h72);
-	send(8'h8b);
+	send(8'h88);
+	send(8'h42);
 	send(8'h7e);
 	#(BITLENGTH * 10);
 	send(8'h08);
@@ -111,8 +111,8 @@ initial begin: B_serial_data
 	send(8'h21);
 	send(8'h22);
 	send(8'h23);
-	send(8'hbb);
-	send(8'h41);
+	send(8'hef);
+	send(8'h4f);
 	send(8'h7e);
 	#(BITLENGTH * 10);
 	send(8'h0a);
@@ -128,8 +128,8 @@ initial begin: B_serial_data
 	send(8'h7d);
 	// 25
 	send(8'h25);
-	send(8'h5e);
-	send(8'ha7);
+	send(8'h87);
+	send(8'h1b);
 	send(8'h7e);
 	#(BITLENGTH * 10);
 	send(8'h09);
@@ -141,16 +141,16 @@ initial begin: B_serial_data
 	send(8'h83);
 	send(8'h6a);
 	send(8'h30);
-	send(8'h6a);
-	send(8'h76);
+	send(8'hd2);
+	send(8'h1a);
 	send(8'h7e);
 	#(BITLENGTH * 200);
 	send(8'h06);
 	send(8'h14);
 	// get_config
 	send(8'h02);
-	send(8'h91);
-	send(8'hc9);
+	send(8'h3e);
+	send(8'h09);
 	send(8'h7e);
 	#(BITLENGTH * 10);
 	send(8'h0b);
@@ -166,8 +166,16 @@ initial begin: B_serial_data
 	send(8'h99);
 	send(8'hba);
 	send(8'h7a);
-	send(8'hc1);
-	send(8'hb1);
+	send(8'h43);
+	send(8'haa);
+	send(8'h7e);
+	#(BITLENGTH * 10);
+	send(8'h06);
+	send(8'h16);
+	// get_clock
+	send(8'h05);
+	send(8'h79);
+	send(8'h06);
 	send(8'h7e);
 	#(BITLENGTH * 10);
 end

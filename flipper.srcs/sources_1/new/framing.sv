@@ -131,7 +131,6 @@ always @(posedge clk) begin
 				crc16_in <= rx_data;
 				crc16_cnt <= 8;
 				crc16 <= 16'hffff;
-				//crc16 <= 16'h0000;
 				recv_temp_wptr <= recv_wptr;
 			end
 		end else if (recv_state == RST_SEQ) begin
@@ -182,13 +181,13 @@ always @(posedge clk) begin
 		end
 	end
 	if (crc16_cnt != 0) begin
-		/* crc16 CCITT */
-		crc16 <= { crc16[14:0], 1'b0 };
-		crc16[12] <= crc16[11] ^ crc16_in[7] ^ crc16[15];
-		crc16[5] <= crc16[4] ^ crc16_in[7] ^ crc16[15];
-		crc16[0] <= crc16_in[7] ^ crc16[15];
+		/* crc16 CCITT, reflect in, reflect out, init 0xffff */
+		crc16 <= { 1'b0, crc16[15:1] };
+		crc16[3] <= crc16[4] ^ crc16_in[0] ^ crc16[0];
+		crc16[10] <= crc16[11] ^ crc16_in[0] ^ crc16[0];
+		crc16[15] <= crc16_in[0] ^ crc16[0];
 		crc16_cnt <= crc16_cnt - 1'b1;
-		crc16_in <= { crc16_in[6:0], 1'b0 };
+		crc16_in <= { 1'b0, crc16_in[7:1] };
 	end
 	/*
 	 * enqueue acknak after message
@@ -282,6 +281,7 @@ always @(posedge clk) begin
 			tx_en <= 1;
 			send_crc16_in <= send_len;
 			send_crc16_cnt <= 8;
+			send_crc16 <= 16'hffff;
 		end else if (send_state == SST_SEQ) begin
 			tx_data <= { 4'b001, send_seq };
 			tx_en <= 1;
@@ -323,15 +323,15 @@ always @(posedge clk) begin
 		send_fifo_rd_en <= 0;
 	end
 	if (send_crc16_cnt != 0) begin
-		/* crc16 CCITT */
-		send_crc16 <= { send_crc16[14:0], 1'b0 };
-		send_crc16[12] <= send_crc16[11] ^ send_crc16_in[7] ^
-			send_crc16[15];
-		send_crc16[5] <= send_crc16[4] ^ send_crc16_in[7] ^
-			send_crc16[15];
-		send_crc16[0] <= send_crc16_in[7] ^ send_crc16[15];
+		/* crc16 CCITT, reflect in, reflect out, init 0xffff */
+		send_crc16 <= { 1'b0, send_crc16[15:1] };
+		send_crc16[3] <= send_crc16[4] ^ send_crc16_in[0] ^
+			send_crc16[0];
+		send_crc16[10] <= send_crc16[11] ^ send_crc16_in[0] ^
+			send_crc16[0];
+		send_crc16[15] <= send_crc16_in[0] ^ send_crc16[0];
 		send_crc16_cnt <= send_crc16_cnt - 1'b1;
-		send_crc16_in <= { send_crc16_in[6:0], 1'b0 };
+		send_crc16_in <= { 1'b0, send_crc16_in[7:1] };
 	end
 end
 

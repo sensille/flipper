@@ -1,0 +1,31 @@
+{  
+   "build_versions":"1",
+   "commands":{  
+      "identify offset=%u count=%c":1,
+      "get_config":2,
+      "finalize_config crc=%u":4,
+      "get_clock":5,
+      "get_uptime":7
+   },
+   "responses":{  
+      "identify_response offset=%u data=%.*s":0,
+      "config is_config=%c crc=%u move_count=%hu is_shutdown=%c":3,
+      "clock clock=%u":6,
+      "uptime high=%u clock=%u":8,
+      "is_shutdown static_string_id=%hu":9,
+      "shutdown clock=%u static_string_id=%hu":10
+   },
+   "config":{  
+      "CLOCK_FREQ":20000000,
+      "MCU":"artix7",
+      "PWM_MAX":4095,
+      "SERIAL_BAUD":250000
+   },
+   "enumerations":{  
+      "static_string_id":{  
+      },
+      "thermocouple_type":{  
+      }
+   },
+   "version":"v0.1-flipper"
+}

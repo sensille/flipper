@@ -27,7 +27,10 @@ module command #(
 	/* ring buffer input */
 	output reg [7:0] send_ring_data = 0,
 	output reg send_ring_wr_en = 0,
-	input wire send_ring_full
+	input wire send_ring_full,
+
+	/* global clock */
+	input wire [63:0] clock
 );
 
 localparam RSP_IDENTIFY = 0;
@@ -35,6 +38,10 @@ localparam CMD_IDENTIFY = 1;
 localparam CMD_GET_CONFIG = 2;
 localparam RSP_GET_CONFIG = 3;
 localparam CMD_FINALIZE_CONFIG = 4;
+localparam CMD_GET_CLOCK = 5;
+localparam RSP_CLOCK = 6;
+localparam CMD_GET_UPTIME = 7;
+localparam RSP_UPTIME = 8;
 localparam MST_IDLE = 0;
 localparam MST_PARSE_ARG_START = 1;
 localparam MST_PARSE_ARG_CONT = 2;
@@ -42,21 +49,23 @@ localparam MST_DISPATCH = 3;
 localparam MST_PARAM = 4;
 localparam MST_PARAM_SKIP = 5;
 localparam MST_PARAM_SEND = 6;
-localparam MST_IDENTIFY_SEND = 7;
-localparam MST_GET_CONFIG_1 = 8;
-localparam MST_GET_CONFIG_2 = 9;
-localparam MST_GET_CONFIG_3 = 10;
-localparam MST_GET_CONFIG_4 = 11;
+localparam MST_IDENTIFY_1 = 7;
+localparam MST_IDENTIFY_SEND = 8;
+localparam MST_GET_CONFIG_1 = 9;
+localparam MST_GET_CONFIG_2 = 10;
+localparam MST_GET_CONFIG_3 = 11;
+localparam MST_GET_CONFIG_4 = 12;
+localparam MST_GET_UPTIME_1 = 13;
 reg [3:0] msg_state = 0;
 reg [7:0] msg_cmd = 0;	/* TODO: correct size */
 localparam MAX_ARGS = 8;
 reg [31:0] args[MAX_ARGS];
 reg [2:0] arg_cnt = 0;
 
-localparam IDENTIFY_LEN = 500;
+localparam IDENTIFY_LEN = 364;
 localparam IDENTIFY_LEN_BITS = $clog2(IDENTIFY_LEN);
 
-reg [7:0] identify_mem[0:499];
+reg [7:0] identify_mem[0:IDENTIFY_LEN-1];
 initial begin
 	$readmemh("identify.mem", identify_mem);
 end
@@ -106,6 +115,10 @@ always @(posedge clk) begin
 			end else if (msg_data == CMD_FINALIZE_CONFIG) begin
 				msg_state <= MST_PARSE_ARG_START;
 				arg_cnt <= 0;
+			end else if (msg_data == CMD_GET_UPTIME) begin
+				msg_state <= MST_DISPATCH;
+			end else if (msg_data == CMD_GET_CLOCK) begin
+				msg_state <= MST_DISPATCH;
 			end
 		end else if (msg_state == MST_PARSE_ARG_START) begin
 			args[arg_cnt] <= msg_data[6:0];
@@ -137,21 +150,9 @@ always @(posedge clk) begin
 	 */
 	if (msg_state == MST_DISPATCH) begin
 		if (msg_cmd == CMD_IDENTIFY) begin
-			/*
-			 * determine length to send
-			 */
-			if (args[1] >= IDENTIFY_LEN) begin
-				params[0] <= 0;
-			end else if (args[1] + args[0] > IDENTIFY_LEN) begin
-				params[0] <= IDENTIFY_LEN - args[1];
-			end else begin
-				params[0] <= args[0];
-			end
-			nparams <= 0;	/* minus one */
-			msg_state <= MST_PARAM;
-			send_ring_data <= RSP_IDENTIFY;
-			send_ring_wr_en <= 1;
-			rsp_len <= 1;
+			/* echo offset */
+			params[1] <= args[1];
+			msg_state <= MST_IDENTIFY_1;
 		end else if (msg_cmd == CMD_GET_CONFIG) begin
 			msg_state <= MST_GET_CONFIG_1;
 		end else if (msg_cmd == CMD_FINALIZE_CONFIG) begin
@@ -159,6 +160,19 @@ always @(posedge clk) begin
 			config_crc <= args[0];
 			is_finalized <= 1;
 			msg_state <= MST_GET_CONFIG_1;
+		end else if (msg_cmd == CMD_GET_UPTIME) begin
+			send_ring_data <= RSP_UPTIME;
+			send_ring_wr_en <= 1;
+			rsp_len <= 1;
+			params[1] <= clock[63:32];
+			msg_state <= MST_GET_UPTIME_1;
+		end else if (msg_cmd == CMD_GET_CLOCK) begin
+			send_ring_data <= RSP_CLOCK;
+			send_ring_wr_en <= 1;
+			rsp_len <= 1;
+			params[0] <= clock[31:0];
+			nparams <= 0;
+			msg_state <= MST_PARAM;
 		end else begin
 			msg_state <= MST_IDLE;
 		end
@@ -211,6 +225,22 @@ always @(posedge clk) begin
 	/*
 	 * continuation of identify
 	 */
+	end else if (msg_state == MST_IDENTIFY_1) begin
+		/*
+		 * determine length to send
+		 */
+		if (args[1] >= IDENTIFY_LEN) begin
+			params[0] <= 0;
+		end else if (args[1] + args[0] > IDENTIFY_LEN) begin
+			params[0] <= IDENTIFY_LEN - args[1];
+		end else begin
+			params[0] <= args[0];
+		end
+		nparams <= 1;	/* minus one */
+		msg_state <= MST_PARAM;
+		send_ring_data <= RSP_IDENTIFY;
+		send_ring_wr_en <= 1;
+		rsp_len <= 1;
 	end else if (msg_state == MST_IDENTIFY_SEND) begin
 		if (params[0] == 0) begin
 			send_fifo_data <= rsp_len;
@@ -242,6 +272,10 @@ always @(posedge clk) begin
 	end else if (msg_state == MST_GET_CONFIG_4) begin
 		params[0] <= is_shutdown;
 		nparams <= 3;	/* minus one */
+		msg_state <= MST_PARAM;
+	end else if (msg_state == MST_GET_UPTIME_1) begin
+		params[0] <= clock[31:0];
+		nparams <= 1;	/* minus one */
 		msg_state <= MST_PARAM;
 	end
 end

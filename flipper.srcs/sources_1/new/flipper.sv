@@ -3,7 +3,7 @@
 
 module flipper #(
 	parameter NENDSTOP = 8,
-	parameter BAUD = 9600
+	parameter BAUD = 250000
 ) (
 	input wire clk_50mhz,
 
@@ -53,6 +53,7 @@ assign debug2 = tx;
 assign debug3 = 0;
 assign debug4 = 0;
 
+reg [63:0] clock = 0;
 wire clk;
 clk u_clk(
 	.clk_50mhz(clk_50mhz),
@@ -148,13 +149,15 @@ command #(
 	/* ring buffer input */
 	.send_ring_data(send_ring_data),
 	.send_ring_wr_en(send_ring_wr_en),
-	.send_ring_full()
+	.send_ring_full(),
+
+	/* global clock */
+	.clock(clock)
 );
 
-reg [31:0] led_cnt = 0;
 always @(posedge clk)
-	led_cnt = led_cnt + 1;
-assign led = led_cnt[22];
+	clock = clock + 1;
+assign led = clock[22];
 
 wire [255:0] leds;
 
@@ -162,8 +165,8 @@ assign leds[1:0] = { rx, tx };
 assign leds[31:2] = 0;
 assign leds[54:32] = 0;
 assign leds[63:57] = 0;
-assign leds[223:72] = 0;
-assign leds[255:224] = led_cnt;
+assign leds[191:72] = 0;
+assign leds[255:192] = clock;
 
 led7219 led7219_u(
 	.clk(clk),
