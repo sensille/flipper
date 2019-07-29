@@ -59,8 +59,10 @@ localparam MST_GET_UPTIME_1 = 13;
 reg [3:0] msg_state = 0;
 reg [7:0] msg_cmd = 0;	/* TODO: correct size */
 localparam MAX_ARGS = 8;
-reg [31:0] args[MAX_ARGS];
-reg [2:0] arg_cnt = 0;
+localparam ARGS_BITS = $clog2(MAX_ARGS);
+reg [31:0] args[0:MAX_ARGS];
+reg [ARGS_BITS-1:0] curr_arg = 0;
+reg [ARGS_BITS-1:0] nargs = 0;
 
 localparam IDENTIFY_LEN = 364;
 localparam IDENTIFY_LEN_BITS = $clog2(IDENTIFY_LEN);
@@ -105,10 +107,11 @@ reg is_finalized = 0;
 reg is_shutdown = 0;
 
 localparam MAX_PARAMS = 8;
-localparam MAX_PARAM_BITS = $clog2(MAX_PARAMS);
+localparam PARAM_BITS = $clog2(MAX_PARAMS);
 reg [31:0] params [MAX_PARAMS];
-reg [MAX_PARAM_BITS-1:0] nparams;
-reg [34:0] curr_param;
+reg [PARAM_BITS-1:0] nparams;
+reg [PARAM_BITS-1:0] curr_param;
+reg [34:0] rcv_param;
 reg [2:0] curr_cnt;	/* counter for VLQ */
 reg [7:0] rsp_len;
 always @(posedge clk) begin
@@ -130,32 +133,34 @@ always @(posedge clk) begin
 		msg_rd_en <= 1;
 		if (msg_state == MST_IDLE) begin
 			msg_cmd <= msg_data;
+			curr_arg <= 0;
+			curr_param <= 0;
 			if (msg_data == CMD_ACKNAK) begin
 				send_fifo_data <= 0;
 				send_fifo_wr_en <= 1;
 				/* state stays at MST_IDLE */
 			end else if (msg_data == CMD_IDENTIFY) begin
 				msg_state <= MST_PARSE_ARG_START;
-				arg_cnt <= 1; /* minus 1 */
+				nargs <= 2;
 			end else if (msg_data == CMD_GET_CONFIG) begin
 				msg_state <= MST_DISPATCH;
 			end else if (msg_data == CMD_FINALIZE_CONFIG) begin
 				msg_state <= MST_PARSE_ARG_START;
-				arg_cnt <= 0;
+				nargs <= 1;
 			end else if (msg_data == CMD_GET_UPTIME) begin
 				msg_state <= MST_DISPATCH;
 			end else if (msg_data == CMD_GET_CLOCK) begin
 				msg_state <= MST_DISPATCH;
 			end
 		end else if (msg_state == MST_PARSE_ARG_START) begin
-			args[arg_cnt] <= msg_data[6:0];
+			args[curr_arg] <= msg_data[6:0];
 			if (msg_data[7]) begin
 				msg_state <= MST_PARSE_ARG_CONT;
 			end else begin
 				_arg_end = 1;
 			end
 		end else if (msg_state == MST_PARSE_ARG_CONT) begin
-			args[arg_cnt] <= { args[arg_cnt][24:0], msg_data[6:0] };
+			args[curr_arg] <= { args[curr_arg][24:0], msg_data[6:0] };
 			if (!msg_data[7]) begin
 				_arg_end = 1;
 			end
@@ -164,8 +169,8 @@ always @(posedge clk) begin
 			msg_rd_en <= 0;	/* we're in some of the states below */
 		end
 		if (_arg_end) begin
-			arg_cnt <= arg_cnt - 1;
-			if (arg_cnt == 0) begin
+			curr_arg <= curr_arg + 1;
+			if (curr_arg + 1 == nargs) begin
 				msg_state <= MST_DISPATCH;
 			end else begin
 				msg_state <= MST_PARSE_ARG_START;
@@ -178,7 +183,7 @@ always @(posedge clk) begin
 	if (msg_state == MST_DISPATCH) begin
 		if (msg_cmd == CMD_IDENTIFY) begin
 			/* echo offset */
-			params[1] <= args[1];
+			params[0] <= args[0];
 			msg_state <= MST_IDENTIFY_1;
 		end else if (msg_cmd == CMD_GET_CONFIG) begin
 			msg_state <= MST_GET_CONFIG_1;
@@ -191,14 +196,14 @@ always @(posedge clk) begin
 			send_ring_data <= RSP_UPTIME;
 			send_ring_wr_en <= 1;
 			rsp_len <= 1;
-			params[1] <= clock[63:32];
+			params[0] <= clock[63:32];
 			msg_state <= MST_GET_UPTIME_1;
 		end else if (msg_cmd == CMD_GET_CLOCK) begin
 			send_ring_data <= RSP_CLOCK;
 			send_ring_wr_en <= 1;
 			rsp_len <= 1;
 			params[0] <= clock[31:0];
-			nparams <= 0;
+			nparams <= 1;
 			msg_state <= MST_PARAM;
 		end else begin
 			msg_state <= MST_IDLE;
@@ -216,22 +221,22 @@ always @(posedge clk) begin
 		 */
 		curr_cnt <= 4;
 		/* extend by 3 bits, 32+3 == 5 * 7 */
-		curr_param <= { params[nparams][31], params[nparams][31],
-				params[nparams][31], params[nparams] };
+		rcv_param <= { params[curr_param][31], params[curr_param][31],
+				params[curr_param][31], params[curr_param] };
 		msg_state <= MST_PARAM_SKIP;
 	end else if (msg_state == MST_PARAM_SKIP) begin
 		if (curr_cnt != 0 &&
-		    (curr_param[34:26] == 9'b111111111 ||
-		     curr_param[34:26] <  9'b000000011)) begin
+		    (rcv_param[34:26] == 9'b111111111 ||
+		     rcv_param[34:26] <  9'b000000011)) begin
 			curr_cnt <= curr_cnt - 1;
-			curr_param <= { curr_param[27:0], 7'b0 };
+			rcv_param <= { rcv_param[27:0], 7'b0 };
 		end else begin
 			msg_state <= MST_PARAM_SEND;
 		end
 	end else if (msg_state == MST_PARAM_SEND) begin
 		if (curr_cnt == 0) begin
-			if (nparams != 0) begin
-				nparams <= nparams - 1;
+			if (curr_param + 1 != nparams) begin
+				curr_param <= curr_param + 1;
 				msg_state <= MST_PARAM;
 			end else if (msg_cmd == CMD_IDENTIFY) begin
 				msg_state <= MST_IDENTIFY_SEND;
@@ -244,11 +249,11 @@ always @(posedge clk) begin
 		end else begin
 			send_ring_data[7] <= 1'b1;
 		end
-		send_ring_data[6:0] <= curr_param[34:28];
+		send_ring_data[6:0] <= rcv_param[34:28];
 		send_ring_wr_en <= 1;
 		rsp_len <= rsp_len + 1;
 		curr_cnt <= curr_cnt - 1;
-		curr_param <= { curr_param[27:0], 7'b0 };
+		rcv_param <= { rcv_param[27:0], 7'b0 };
 	/*
 	 * continuation of identify
 	 */
@@ -256,29 +261,29 @@ always @(posedge clk) begin
 		/*
 		 * determine length to send
 		 */
-		if (args[1] >= IDENTIFY_LEN) begin
-			params[0] <= 0;
-		end else if (args[1] + args[0] > IDENTIFY_LEN) begin
-			params[0] <= IDENTIFY_LEN - args[1];
+		if (args[0] >= IDENTIFY_LEN) begin
+			params[1] <= 0;
+		end else if (args[0] + args[1] > IDENTIFY_LEN) begin
+			params[1] <= IDENTIFY_LEN - args[0];
 		end else begin
-			params[0] <= args[0];
+			params[1] <= args[1];
 		end
-		nparams <= 1;	/* minus one */
+		nparams <= 2;
 		msg_state <= MST_PARAM;
 		send_ring_data <= RSP_IDENTIFY;
 		send_ring_wr_en <= 1;
 		rsp_len <= 1;
 	end else if (msg_state == MST_IDENTIFY_SEND) begin
-		if (params[0] == 0) begin
+		if (params[1] == 0) begin
 			send_fifo_data <= rsp_len;
 			send_fifo_wr_en <= 1;
 			msg_state <= MST_IDLE;
 		end else begin
-			send_ring_data <= identify_mem[args[1]];
-			args[1] <= args[1] + 1;
+			send_ring_data <= identify_mem[args[0]];
+			args[0] <= args[0] + 1;
 			send_ring_wr_en <= 1;
 			rsp_len <= rsp_len + 1;
-			params[0] <= params[0] - 1;
+			params[1] <= params[1] - 1;
 		end
 	/*
 	 * continuation of get_config, also in response to
@@ -288,21 +293,21 @@ always @(posedge clk) begin
 		send_ring_data <= RSP_GET_CONFIG;
 		send_ring_wr_en <= 1;
 		rsp_len <= 1;
-		params[3] <= is_finalized;
+		params[0] <= is_finalized;
 		msg_state <= MST_GET_CONFIG_2;
 	end else if (msg_state == MST_GET_CONFIG_2) begin
-		params[2] <= config_crc;
+		params[1] <= config_crc;
 		msg_state <= MST_GET_CONFIG_3;
 	end else if (msg_state == MST_GET_CONFIG_3) begin
-		params[1] <= MOVE_COUNT;
+		params[2] <= MOVE_COUNT;
 		msg_state <= MST_GET_CONFIG_4;
 	end else if (msg_state == MST_GET_CONFIG_4) begin
-		params[0] <= is_shutdown;
-		nparams <= 3;	/* minus one */
+		params[3] <= is_shutdown;
+		nparams <= 4;
 		msg_state <= MST_PARAM;
 	end else if (msg_state == MST_GET_UPTIME_1) begin
-		params[0] <= clock[31:0];
-		nparams <= 1;	/* minus one */
+		params[1] <= clock[31:0];
+		nparams <= 2;
 		msg_state <= MST_PARAM;
 	end
 end
