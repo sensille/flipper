@@ -65,6 +65,33 @@ reg [2:0] arg_cnt = 0;
 localparam IDENTIFY_LEN = 364;
 localparam IDENTIFY_LEN_BITS = $clog2(IDENTIFY_LEN);
 
+/*
+ * pin names
+ * Pins are organized in blocks of 16
+ * 2 blocks are reserved for GPIO
+ */
+localparam PIN_GPIO_BASE = 0;
+localparam PIN_GPIO_BITS = 5;
+localparam PIN_GPIO_NUM = 1;
+localparam PIN_SCK = 32;
+localparam PIN_SDI = 33;
+localparam PIN_SDO = 34;
+localparam PIN_CS_BASE = 48;
+localparam PIN_CS_BITS = 4;
+localparam PIN_CS_NUM = 2;
+localparam PIN_DIR_BASE = 64;
+localparam PIN_DIR_BITS = 4;
+localparam PIN_DIR_NUM = 6;
+localparam PIN_STEP_BASE = 80;
+localparam PIN_STEP_BITS = 4;
+localparam PIN_STEP_NUM = 6;
+localparam PIN_PWM_BASE = 96;
+localparam PIN_PWM_BITS = 4;
+localparam PIN_PWM_NUM = 6;
+localparam PIN_ES_BASE = 112;
+localparam PIN_ES_BITS = 4;
+localparam PIN_ES_NUM = 8;
+
 reg [7:0] identify_mem[0:IDENTIFY_LEN-1];
 initial begin
 	$readmemh("identify.mem", identify_mem);

@@ -22,6 +22,17 @@
       "SERIAL_BAUD":250000
    },
    "enumerations":{  
+      "pin":{  
+         "GPIO0":[ 0, 1 ],
+         "SCK":32,
+         "SDI":33,
+         "SDO":34,
+         "CS0":[ 48, 2 ],
+         "DIR0":[ 64, 6 ],
+         "STEP0":[ 80, 6 ],
+         "PWM0":[ 96, 6 ],
+         "ES0":[112, 8 ]
+      },
       "static_string_id":{  
       },
       "thermocouple_type":{  
