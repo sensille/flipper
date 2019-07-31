@@ -66,7 +66,6 @@ assign hotend = 0;
 assign bed = 0;
 assign probe_servo = 0;
 assign fan_extruder = 0;
-assign en = 1;
 assign sck = 0;
 assign cs123 = 1;
 assign cs456 = 1;
@@ -125,10 +124,14 @@ framing #(
 	.clr(1'b0)
 );
 
+localparam NGPIO = 4;
+wire [NGPIO-1:0] gpio;
+
 command #(
 	.LEN_BITS(LEN_BITS),
 	.LEN_FIFO_BITS(LEN_FIFO_BITS),
-        .CMD_ACKNAK(CMD_ACKNAK)
+        .CMD_ACKNAK(CMD_ACKNAK),
+	.NGPIO(NGPIO)
 ) u_command (
 	.clk(clk),
 
@@ -152,8 +155,13 @@ command #(
 	.send_ring_full(),
 
 	/* global clock */
-	.clock(clock)
+	.clock(clock),
+
+	/* I/O */
+	.gpio(gpio)
 );
+
+assign en = gpio[0];
 
 always @(posedge clk)
 	clock = clock + 1;
@@ -162,7 +170,8 @@ assign led = clock[22];
 wire [255:0] leds;
 
 assign leds[1:0] = { rx, tx };
-assign leds[31:2] = 0;
+assign leds[5:2] = gpio;
+assign leds[31:6] = 0;
 assign leds[54:32] = 0;
 assign leds[63:57] = 0;
 assign leds[191:72] = 0;

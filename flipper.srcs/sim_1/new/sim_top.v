@@ -178,6 +178,16 @@ initial begin: B_serial_data
 	send(8'h06);
 	send(8'h7e);
 	#(BITLENGTH * 10);
+	send(8'h08);
+	send(8'h17);
+	// set_digital_out
+	send(8'h0b);
+	send(8'h00);
+	send(8'h01);
+	send(8'hc6);
+	send(8'h07);
+	send(8'h7e);
+	#(BITLENGTH * 10);
 end
 
 endmodule

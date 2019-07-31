@@ -6,7 +6,8 @@ module command #(
 	parameter LEN_BITS = 8,
 	parameter LEN_FIFO_BITS = 7,
 	parameter CMD_ACKNAK = 8'hff,
-	parameter MOVE_COUNT = 64
+	parameter MOVE_COUNT = 64,
+	parameter NGPIO = 4
 ) (
 	input wire clk,
 
@@ -30,7 +31,12 @@ module command #(
 	input wire send_ring_full,
 
 	/* global clock */
-	input wire [63:0] clock
+	input wire [63:0] clock,
+
+	/*
+	 * I/O
+	 */
+	wire [NGPIO-1:0] gpio
 );
 
 localparam RSP_IDENTIFY = 0;
@@ -42,6 +48,8 @@ localparam CMD_GET_CLOCK = 5;
 localparam RSP_CLOCK = 6;
 localparam CMD_GET_UPTIME = 7;
 localparam RSP_UPTIME = 8;
+localparam CMD_SET_DIGITAL_OUT = 11;
+
 localparam MST_IDLE = 0;
 localparam MST_PARSE_ARG_START = 1;
 localparam MST_PARSE_ARG_CONT = 2;
@@ -56,6 +64,8 @@ localparam MST_GET_CONFIG_2 = 10;
 localparam MST_GET_CONFIG_3 = 11;
 localparam MST_GET_CONFIG_4 = 12;
 localparam MST_GET_UPTIME_1 = 13;
+localparam MST_SHUTDOWN = 14;
+
 reg [3:0] msg_state = 0;
 reg [7:0] msg_cmd = 0;	/* TODO: correct size */
 localparam MAX_ARGS = 8;
@@ -64,7 +74,7 @@ reg [31:0] args[0:MAX_ARGS];
 reg [ARGS_BITS-1:0] curr_arg = 0;
 reg [ARGS_BITS-1:0] nargs = 0;
 
-localparam IDENTIFY_LEN = 364;
+localparam IDENTIFY_LEN = 479;
 localparam IDENTIFY_LEN_BITS = $clog2(IDENTIFY_LEN);
 
 /*
@@ -74,7 +84,7 @@ localparam IDENTIFY_LEN_BITS = $clog2(IDENTIFY_LEN);
  */
 localparam PIN_GPIO_BASE = 0;
 localparam PIN_GPIO_BITS = 5;
-localparam PIN_GPIO_NUM = 1;
+localparam PIN_GPIO_NUM = NGPIO;
 localparam PIN_SCK = 32;
 localparam PIN_SDI = 33;
 localparam PIN_SDO = 34;
@@ -105,6 +115,10 @@ end
 reg [31:0] config_crc = 0;
 reg is_finalized = 0;
 reg is_shutdown = 0;
+
+/* gpio */
+reg [NGPIO-1:0] gpio_out = { 0 };
+assign gpio = gpio_out;
 
 localparam MAX_PARAMS = 8;
 localparam PARAM_BITS = $clog2(MAX_PARAMS);
@@ -151,6 +165,9 @@ always @(posedge clk) begin
 				msg_state <= MST_DISPATCH;
 			end else if (msg_data == CMD_GET_CLOCK) begin
 				msg_state <= MST_DISPATCH;
+			end else if (msg_data == CMD_SET_DIGITAL_OUT) begin
+				msg_state <= MST_PARSE_ARG_START;
+				nargs <= 2;
 			end
 		end else if (msg_state == MST_PARSE_ARG_START) begin
 			args[curr_arg] <= msg_data[6:0];
@@ -205,6 +222,15 @@ always @(posedge clk) begin
 			params[0] <= clock[31:0];
 			nparams <= 1;
 			msg_state <= MST_PARAM;
+		end else if (msg_cmd == CMD_SET_DIGITAL_OUT) begin
+			if (args[0][31:31-PIN_GPIO_BITS+1] != PIN_GPIO_BASE) begin
+				msg_state <= MST_SHUTDOWN;
+			end else if (args[0][PIN_GPIO_BITS-1:0] >= PIN_GPIO_NUM) begin
+				msg_state <= MST_SHUTDOWN;
+			end else begin
+				gpio_out[args[0][PIN_GPIO_BITS-1:0]] <= args[1][0];
+				msg_state <= MST_IDLE;
+			end
 		end else begin
 			msg_state <= MST_IDLE;
 		end
@@ -309,6 +335,8 @@ always @(posedge clk) begin
 		params[1] <= clock[31:0];
 		nparams <= 2;
 		msg_state <= MST_PARAM;
+	end else if (msg_state == MST_SHUTDOWN) begin
+		/* for now, just stay here */
 	end
 end
 
