@@ -177,6 +177,7 @@ always @(posedge clk) begin
 		end else if (recv_state == RST_EOF) begin
 			/* missing EOF, discard */
 			recv_state <= RST_NEED_SYNC;
+			recv_temp_wptr <= recv_wptr;
 			send_acknak <= 1;
 		end
 	end
@@ -193,10 +194,9 @@ always @(posedge clk) begin
 	 * enqueue acknak after message
 	 */
 	if (send_acknak) begin
-		recv_ring[recv_wptr] <= CMD_ACKNAK;
-		recv_wptr <= recv_wptr + 1'b1;
+		recv_ring[recv_temp_wptr] <= CMD_ACKNAK;
+		recv_wptr <= recv_wptr + 1'b1;	/* TODO: optimize */
 		/* needed for cts generation */
-		recv_temp_wptr <= recv_wptr + 1'b1;
 		send_acknak <= 0;
 	end
 

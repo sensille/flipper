@@ -43,7 +43,7 @@ module command #(
 	/*
 	 * debug
 	 */
-	output [63:0] debug
+	output wire [63:0] debug
 );
 
 localparam RSP_IDENTIFY = 0;
