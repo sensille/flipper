@@ -7,7 +7,8 @@ module command #(
 	parameter LEN_FIFO_BITS = 7,
 	parameter CMD_ACKNAK = 8'hff,
 	parameter MOVE_COUNT = 64,
-	parameter NGPIO = 4
+	parameter NGPIO = 4,
+	parameter NPWM = 6
 ) (
 	input wire clk,
 
@@ -36,7 +37,13 @@ module command #(
 	/*
 	 * I/O
 	 */
-	wire [NGPIO-1:0] gpio
+	output wire [NGPIO-1:0] gpio,
+	output wire [NPWM-1:0] pwm,
+
+	/*
+	 * debug
+	 */
+	output [63:0] debug
 );
 
 localparam RSP_IDENTIFY = 0;
@@ -49,6 +56,14 @@ localparam RSP_CLOCK = 6;
 localparam CMD_GET_UPTIME = 7;
 localparam RSP_UPTIME = 8;
 localparam CMD_SET_DIGITAL_OUT = 11;
+localparam CMD_ALLOCATE_OIDS = 12;
+localparam CMD_CONFIG_SOFT_PWM_OUT = 13;
+localparam CMD_SCHEDULE_SOFT_PWM_OUT = 14;
+/*
+      "allocate_oids count=%c":12,
+      "config_soft_pwm_out oid=%c pin=%u cycle_ticks=%u value=%c default_value=%c max_duration=%u":13,
+      "schedule_soft_pwm_out oid=%c clock=%u on_ticks=%u":14,
+*/
 
 localparam MST_IDLE = 0;
 localparam MST_PARSE_ARG_START = 1;
@@ -74,7 +89,7 @@ reg [31:0] args[0:MAX_ARGS];
 reg [ARGS_BITS-1:0] curr_arg = 0;
 reg [ARGS_BITS-1:0] nargs = 0;
 
-localparam IDENTIFY_LEN = 479;
+localparam IDENTIFY_LEN = 551;
 localparam IDENTIFY_LEN_BITS = $clog2(IDENTIFY_LEN);
 
 /*
@@ -103,6 +118,18 @@ localparam PIN_PWM_NUM = 6;
 localparam PIN_ES_BASE = 112;
 localparam PIN_ES_BITS = 4;
 localparam PIN_ES_NUM = 8;
+localparam PIN_MAX = 127;
+localparam PIN_BITS = $clog2(PIN_MAX);
+localparam OID_MAX = PIN_MAX;
+localparam OID_BITS = $clog2(OID_MAX);
+localparam ALLOCATED_BIT = OID_BITS;
+
+/*
+ * oid mapping. for now, we just store the pin name there,
+ * as all pins have dedicated functions
+ * Additionally, we have one 'allocated' bit
+ */
+reg [ALLOCATED_BIT:0] oids[OID_MAX];
 
 reg [7:0] identify_mem[0:IDENTIFY_LEN-1];
 initial begin
@@ -117,8 +144,44 @@ reg is_finalized = 0;
 reg is_shutdown = 0;
 
 /* gpio */
-reg [NGPIO-1:0] gpio_out = { 0 };
+reg [NGPIO-1:0] gpio_out = 0;
 assign gpio = gpio_out;
+
+/* pwm */
+localparam PWM_BITS = 26;
+reg [PWM_BITS-1:0] pwm_cycle_ticks[NPWM];
+reg [PWM_BITS-1:0] pwm_on_ticks[NPWM];
+reg [PWM_BITS-1:0] pwm_next_on_ticks[NPWM];
+reg [PWM_BITS-1:0] pwm_next_clock[NPWM];
+reg pwm_default_value[NPWM];
+reg [PWM_BITS-1:0] pwm_max_duration[NPWM];
+reg [PWM_BITS-1:0] pwm_duration[NPWM];
+integer i;
+initial begin
+	for (i = 0; i < NPWM; i = i + 1) begin
+		pwm_cycle_ticks[i] = 0;
+		pwm_on_ticks[i] = 0;
+		pwm_next_on_ticks[i] = 0;
+		pwm_next_clock[i] = 0;
+		pwm_default_value[i] = 1'b0;
+		pwm_max_duration[i] = 0;
+		pwm_duration[i] = 0;
+	end
+end
+
+genvar pwm_gi;
+generate
+	for (pwm_gi = 0; pwm_gi < NPWM; pwm_gi = pwm_gi + 1) begin : genpwm
+		pwm #(
+			.PWM_BITS(PWM_BITS)
+		) u_pwm (
+			.clk(clk),
+			.cycle_ticks(pwm_cycle_ticks[pwm_gi]),
+			.on_ticks(pwm_on_ticks[pwm_gi]),
+			.out(pwm[pwm_gi])
+		);
+	end
+endgenerate
 
 localparam MAX_PARAMS = 8;
 localparam PARAM_BITS = $clog2(MAX_PARAMS);
@@ -128,6 +191,9 @@ reg [PARAM_BITS-1:0] curr_param;
 reg [34:0] rcv_param;
 reg [2:0] curr_cnt;	/* counter for VLQ */
 reg [7:0] rsp_len;
+/* for convenience resolve the oid to pin lookup */
+wire [PIN_BITS-1:0] oid2pin = oids[args[0][OID_BITS-1:0]];
+
 always @(posedge clk) begin
 	reg _arg_end;
 	if (msg_rd_en) begin
@@ -168,6 +234,18 @@ always @(posedge clk) begin
 			end else if (msg_data == CMD_SET_DIGITAL_OUT) begin
 				msg_state <= MST_PARSE_ARG_START;
 				nargs <= 2;
+			end else if (msg_data == CMD_ALLOCATE_OIDS) begin
+				msg_state <= MST_PARSE_ARG_START;
+				nargs <= 1;
+			end else if (msg_data == CMD_CONFIG_SOFT_PWM_OUT) begin
+      //"config_soft_pwm_out oid=%c pin=%u cycle_ticks=%u value=%c default_value=%c max_duration=%u":13,
+				msg_state <= MST_PARSE_ARG_START;
+				nargs <= 6;
+			end else if (msg_data == CMD_SCHEDULE_SOFT_PWM_OUT) begin
+      //"config_soft_pwm_out oid=%c pin=%u cycle_ticks=%u value=%c default_value=%c max_duration=%u":13,
+      // "schedule_soft_pwm_out oid=%c clock=%u on_ticks=%u":14,
+				msg_state <= MST_PARSE_ARG_START;
+				nargs <= 3;
 			end
 		end else if (msg_state == MST_PARSE_ARG_START) begin
 			args[curr_arg] <= msg_data[6:0];
@@ -229,6 +307,39 @@ always @(posedge clk) begin
 				msg_state <= MST_SHUTDOWN;
 			end else begin
 				gpio_out[args[0][PIN_GPIO_BITS-1:0]] <= args[1][0];
+				msg_state <= MST_IDLE;
+			end
+		end else if (msg_cmd == CMD_ALLOCATE_OIDS) begin
+			/* we have a static array of oids. check only, do nothing */
+			if (args[0] > OID_MAX) begin
+				msg_state <= MST_SHUTDOWN;
+			end else begin
+				msg_state <= MST_IDLE;
+			end
+		end else if (msg_cmd == CMD_CONFIG_SOFT_PWM_OUT) begin
+			if (args[0] >= OID_MAX) begin
+				msg_state <= MST_SHUTDOWN;
+			end else if (args[1][31:PIN_PWM_BITS] != PIN_PWM_BASE[31:PIN_PWM_BITS]) begin
+				msg_state <= MST_SHUTDOWN;
+			end else begin
+				oids[args[0][OID_BITS-1:0]] <= { 1'b1, args[1][OID_BITS-1:0] };
+      //"config_soft_pwm_out oid=%c pin=%u cycle_ticks=%u value=%c default_value=%c max_duration=%u":13,
+				pwm_cycle_ticks[args[1][PIN_PWM_BITS-1:0]] <= args[2];
+				pwm_on_ticks[args[1][PIN_PWM_BITS-1:0]] <= { PWM_BITS { args[3][0] } };
+				pwm_default_value[args[1][PIN_PWM_BITS-1:0]] <= args[4][0];
+				pwm_max_duration[args[1][PIN_PWM_BITS-1:0]] <= args[5];
+				msg_state <= MST_IDLE;
+			end
+		end else if (msg_cmd == CMD_SCHEDULE_SOFT_PWM_OUT) begin
+// "schedule_soft_pwm_out oid=%c clock=%u on_ticks=%u":14,
+			if (args[0] >= OID_MAX) begin
+				msg_state <= MST_SHUTDOWN;
+			end else if (oid2pin[OID_BITS-1:PIN_PWM_BITS] !=
+			             PIN_PWM_BASE[OID_BITS-1:PIN_PWM_BITS]) begin
+				msg_state <= MST_SHUTDOWN;
+			end else begin
+				pwm_next_clock[oid2pin[PIN_PWM_BITS-1:0]] <= args[1];
+				pwm_next_on_ticks[oid2pin[PIN_PWM_BITS-1:0]] <= args[2];
 				msg_state <= MST_IDLE;
 			end
 		end else begin
@@ -338,6 +449,31 @@ always @(posedge clk) begin
 	end else if (msg_state == MST_SHUTDOWN) begin
 		/* for now, just stay here */
 	end
+	/*
+	 * pwm duration safety feature. Must be before state
+	 * machine because pwm_duration is set on load.
+	 */
+	for (int i = 0; i < NPWM; i = i + 1) begin
+		if (pwm_duration[i] == 1) begin
+			pwm_on_ticks[i] <= { PWM_BITS { pwm_default_value[i] } };
+		end else if (pwm_duration[i] != 0) begin
+			pwm_duration[i] <= pwm_duration[i] - 1;
+		end
+	end
+	/*
+	 * loading of pwm_on_ticks, schedule
+	 */
+	for (int i = 0; i < NPWM; i = i + 1) begin
+		if (pwm_next_clock[i] == clock[31:0]) begin
+			pwm_on_ticks[i] <= pwm_next_on_ticks[i];
+			pwm_duration[i] <= pwm_max_duration[i];
+		end
+	end
 end
+
+assign debug[3:0] = msg_state;
+assign debug[11:4] = msg_cmd;
+assign debug[37:12] = pwm_cycle_ticks[0];
+assign debug[63:38] = pwm_on_ticks[0];
 
 endmodule

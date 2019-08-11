@@ -188,6 +188,34 @@ initial begin: B_serial_data
 	send(8'h07);
 	send(8'h7e);
 	#(BITLENGTH * 10);
+	send(8'h0f);
+	send(8'h18);
+	send(8'h0d); // config_soft_pwm_out
+	send(8'h11); // oid
+	send(8'h80); // pin PWM0
+	send(8'h60);
+	send(8'h33); // cycle ticks
+	send(8'h01); // vaule
+	send(8'h00); // default
+	send(8'h81); // max duration
+	send(8'h80);
+	send(8'h00);
+	send(8'he8);
+	send(8'h33);
+	send(8'h7e);
+	#(BITLENGTH * 200);
+	send(8'h0b);
+	send(8'h19);
+	send(8'h0e); // schedule_soft_pwm_out
+	send(8'h11); // oid
+	send(8'h84); // clock 0x13600 000100 1101100 0000000
+	send(8'hec);
+	send(8'h00);
+	send(8'h22); // on_ticks
+	send(8'h58);
+	send(8'h26);
+	send(8'h7e);
+	#(BITLENGTH * 10);
 end
 
 endmodule

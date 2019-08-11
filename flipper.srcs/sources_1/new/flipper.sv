@@ -50,8 +50,8 @@ module flipper #(
 
 assign debug1 = rx;
 assign debug2 = tx;
-assign debug3 = 0;
-assign debug4 = 0;
+assign debug3 = fan_hotend;
+assign debug4 = fan_part;
 
 reg [63:0] clock = 0;
 wire clk;
@@ -60,12 +60,8 @@ clk u_clk(
 	.clk(clk)		// 20 MHz
 );
 
-assign fan_hotend = 0;
-assign fan_part = 0;
 assign hotend = 0;
 assign bed = 0;
-assign probe_servo = 0;
-assign fan_extruder = 0;
 assign sck = 0;
 assign cs123 = 1;
 assign cs456 = 1;
@@ -125,13 +121,17 @@ framing #(
 );
 
 localparam NGPIO = 4;
+localparam NPWM = 6;
 wire [NGPIO-1:0] gpio;
+wire [NPWM-1:0] pwm;
+wire [63:0] cmd_debug;
 
 command #(
 	.LEN_BITS(LEN_BITS),
 	.LEN_FIFO_BITS(LEN_FIFO_BITS),
         .CMD_ACKNAK(CMD_ACKNAK),
-	.NGPIO(NGPIO)
+	.NGPIO(NGPIO),
+	.NPWM(NPWM)
 ) u_command (
 	.clk(clk),
 
@@ -158,10 +158,19 @@ command #(
 	.clock(clock),
 
 	/* I/O */
-	.gpio(gpio)
+	.gpio(gpio),
+	.pwm(pwm),
+
+	.debug(cmd_debug)
 );
 
 assign en = gpio[0];
+assign fan_hotend = pwm[0];
+assign fan_part = pwm[1];
+//assign hotend = pwm[2];
+//assign bed = pwm[3];
+assign fan_extruder = pwm[4];
+assign probe_servo = pwm[5];
 
 always @(posedge clk)
 	clock = clock + 1;
@@ -172,9 +181,11 @@ wire [255:0] leds;
 assign leds[1:0] = { rx, tx };
 assign leds[5:2] = gpio;
 assign leds[31:6] = 0;
-assign leds[54:32] = 0;
+assign leds[32+NPWM-1:32] = pwm;
+assign leds[54:32+NPWM] = 0;
 assign leds[63:57] = 0;
-assign leds[191:72] = 0;
+assign leds[127:64] = cmd_debug;
+assign leds[191:128] = 0;
 assign leds[255:192] = clock;
 
 led7219 led7219_u(

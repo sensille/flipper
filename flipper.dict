@@ -7,7 +7,9 @@
       "get_clock":5,
       "get_uptime":7,
       "set_digital_out pin=%u value=%c":11,
-      "set_pwm_out pin=%u cycle_ticks=%u value=%hu":12,
+      "allocate_oids count=%c":12,
+      "config_soft_pwm_out oid=%c pin=%u cycle_ticks=%u value=%c default_value=%c max_duration=%u":13,
+      "schedule_soft_pwm_out oid=%c clock=%u on_ticks=%u":14
    },
    "responses":{  
       "identify_response offset=%u data=%.*s":0,
