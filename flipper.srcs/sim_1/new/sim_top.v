@@ -215,6 +215,21 @@ initial begin: B_serial_data
 	send(8'h58);
 	send(8'h26);
 	send(8'h7e);
+	#(BITLENGTH * 400);
+	send(8'h0d);
+	send(8'h1a);
+	send(8'h0e); // schedule_soft_pwm_out
+	send(8'h11); // oid
+	             // clock 0xabcd0123 1010 1011 1100 1101 0000 0001 0010 0011
+	send(8'h8a); // clock 0xabcd0123 1010 1011110 0110100 0000010 0100011
+	send(8'hde);
+	send(8'hb4);
+	send(8'h82);
+	send(8'h23);
+	send(8'h22); // on_ticks
+	send(8'h7b);
+	send(8'hec);
+	send(8'h7e);
 	#(BITLENGTH * 10);
 end
 

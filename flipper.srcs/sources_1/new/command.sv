@@ -152,10 +152,11 @@ localparam PWM_BITS = 26;
 reg [PWM_BITS-1:0] pwm_cycle_ticks[NPWM];
 reg [PWM_BITS-1:0] pwm_on_ticks[NPWM];
 reg [PWM_BITS-1:0] pwm_next_on_ticks[NPWM];
-reg [PWM_BITS-1:0] pwm_next_clock[NPWM];
+reg [31:0] pwm_next_clock[NPWM];
+reg pwm_scheduled[NPWM];
 reg pwm_default_value[NPWM];
-reg [PWM_BITS-1:0] pwm_max_duration[NPWM];
-reg [PWM_BITS-1:0] pwm_duration[NPWM];
+reg [31:0] pwm_max_duration[NPWM];
+reg [31:0] pwm_duration[NPWM];
 integer i;
 initial begin
 	for (i = 0; i < NPWM; i = i + 1) begin
@@ -166,6 +167,7 @@ initial begin
 		pwm_default_value[i] = 1'b0;
 		pwm_max_duration[i] = 0;
 		pwm_duration[i] = 0;
+		pwm_scheduled[i] = 0;
 	end
 end
 
@@ -328,6 +330,7 @@ always @(posedge clk) begin
 				pwm_on_ticks[args[1][PIN_PWM_BITS-1:0]] <= { PWM_BITS { args[3][0] } };
 				pwm_default_value[args[1][PIN_PWM_BITS-1:0]] <= args[4][0];
 				pwm_max_duration[args[1][PIN_PWM_BITS-1:0]] <= args[5];
+				pwm_duration[args[1][PIN_PWM_BITS-1:0]] <= args[5];
 				msg_state <= MST_IDLE;
 			end
 		end else if (msg_cmd == CMD_SCHEDULE_SOFT_PWM_OUT) begin
@@ -340,6 +343,7 @@ always @(posedge clk) begin
 			end else begin
 				pwm_next_clock[oid2pin[PIN_PWM_BITS-1:0]] <= args[1];
 				pwm_next_on_ticks[oid2pin[PIN_PWM_BITS-1:0]] <= args[2];
+				pwm_scheduled[oid2pin[PIN_PWM_BITS-1:0]] <= 1;
 				msg_state <= MST_IDLE;
 			end
 		end else begin
@@ -464,9 +468,10 @@ always @(posedge clk) begin
 	 * loading of pwm_on_ticks, schedule
 	 */
 	for (int i = 0; i < NPWM; i = i + 1) begin
-		if (pwm_next_clock[i] == clock[31:0]) begin
+		if (pwm_scheduled[i] && pwm_next_clock[i] == clock[31:0]) begin
 			pwm_on_ticks[i] <= pwm_next_on_ticks[i];
 			pwm_duration[i] <= pwm_max_duration[i];
+			pwm_scheduled[i] <= 0;
 		end
 	end
 end
