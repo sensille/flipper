@@ -66,8 +66,6 @@ assign sck = 0;
 assign cs123 = 1;
 assign cs456 = 1;
 assign sdi = 0;
-assign dir = 0;
-assign step = 0;
 
 wire [7:0] msg_data;
 wire msg_ready;
@@ -160,6 +158,8 @@ command #(
 	/* I/O */
 	.gpio(gpio),
 	.pwm(pwm),
+	.step(step),
+	.dir(dir),
 
 	.debug(cmd_debug)
 );

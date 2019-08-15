@@ -1,6 +1,13 @@
 `timescale 1ns / 1ps
 `default_nettype none
 
+/*
+ * simple fifo. The next data is always available
+ * at dout, but will only become available with
+ * the clock after rd_en going high
+ * If rd_en is kept high, data will only be available
+ * with one clock delay.
+ */
 module fifo #(
 	parameter DATA_WIDTH = 72,
 	parameter ADDR_WIDTH = 6
@@ -12,7 +19,7 @@ module fifo #(
 	input wire wr_en,
 	output wire full,
 	// read side
-	output wire [DATA_WIDTH - 1 : 0] dout,
+	output reg [DATA_WIDTH - 1 : 0] dout = 0,
 	input wire rd_en,
 	output wire empty,
 
@@ -31,10 +38,10 @@ wire [ADDR_WIDTH - 1 : 0] next_wrptr = wrptr + 1;
 
 assign empty = wrptr == rdptr;
 assign full = next_wrptr == rdptr;
-assign dout = ram[rdptr];
 assign elemcnt = wrptr - rdptr;
 
 always @(posedge clk) begin
+	dout <= ram[rdptr];
 	if (clr) begin
 		rdptr <= 0;
 		wrptr <= 0;
