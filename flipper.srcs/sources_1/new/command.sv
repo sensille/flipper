@@ -265,6 +265,7 @@ reg [34:0] rcv_param;
 reg [2:0] curr_cnt;	/* counter for VLQ */
 reg [7:0] rsp_len;
 reg [PIN_BITS-1:0] oid2pin = 0;
+reg write_oid = 0;
 
 always @(posedge clk) begin
 	reg _arg_end;
@@ -279,10 +280,15 @@ always @(posedge clk) begin
 	end
 	step_start <= 0;
 	/*
-	 * for convenience resolve the oid to pin lookup.
-	 * it's registered, so oids can be implemented in BRAM
+	 * channel all read/write to oids array here, so it
+	 * can be properly inferred as RAM
 	 */
-	oid2pin <= oids[args[0][OID_BITS-1:0]];
+	if (write_oid) begin
+		oids[args[0][OID_BITS-1:0]] <= { 1'b1, args[1][OID_BITS-1:0] };
+		write_oid <= 0;
+	end else begin
+		oid2pin <= oids[args[0][OID_BITS-1:0]];
+	end
 	/*
 	 * ------------------------------------
 	 * stage 1, parse arguments, decode VLQ
@@ -436,7 +442,7 @@ always @(posedge clk) begin
 				/* pin out of range */
 				msg_state <= MST_SHUTDOWN;
 			end else begin
-				oids[args[0][OID_BITS-1:0]] <= { 1'b1, args[1][OID_BITS-1:0] };
+				write_oid <= 1;
 				pwm_cycle_ticks[args[1][PIN_PWM_BITS-1:0]] <= args[2];
 				pwm_on_ticks[args[1][PIN_PWM_BITS-1:0]] <= { PWM_BITS { args[3][0] } };
 				pwm_default_value[args[1][PIN_PWM_BITS-1:0]] <= args[4][0];
@@ -479,7 +485,7 @@ always @(posedge clk) begin
 				/* step and dir out of range */
 				msg_state <= MST_SHUTDOWN;
 			end else begin
-				oids[args[0][OID_BITS-1:0]] <= { 1'b1, args[1][OID_BITS-1:0] };
+				write_oid <= 1;
 				step_min_stop_interval[args[1][31:0]] <= args[3];
 				invert_step[args[1][31:0]] <= args[4][0];
 				msg_state <= MST_IDLE;
@@ -497,7 +503,7 @@ always @(posedge clk) begin
 				/* pin out of range */
 				msg_state <= MST_SHUTDOWN;
 			end else begin
-				oids[args[0][OID_BITS-1:0]] <= { 1'b1, args[1][OID_BITS-1:0] };
+				write_oid <= 1;
 				/* ignore parameters */
 				msg_state <= MST_IDLE;
 			end
