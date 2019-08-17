@@ -12,13 +12,14 @@ module stepdir #(
 	input wire clk,
 	input wire [71:0] queue_wr_data,
 	input wire queue_wr_en,
+	output wire queue_empty,
+	output reg running = 0,
 
 	input wire start,
 	input wire reset,
 
 	output reg step = 0,
 	output reg dir = 0,
-	output reg error = 0,
 
 	output reg [31:0] position = 0
 );
@@ -27,7 +28,6 @@ localparam MOVE_ADDR_BITS = $clog2(MOVE_COUNT);
 
 wire [71:0] queue_rd_data;
 reg queue_rd_en = 0;
-wire queue_empty;
 
 fifo #(
 	.DATA_WIDTH(72),
@@ -63,7 +63,6 @@ reg [STEP_COUNT_BITS-1:0] count = 0;
 reg [STEP_ADD_BITS-1:0] add = 0;
 wire [STEP_INTERVAL_BITS-1:0] signed_add = { {(STEP_INTERVAL_BITS - STEP_ADD_BITS) { add[STEP_ADD_BITS-1] }}, add };
 
-reg running = 0;
 reg do_step = 0;
 
 always @(posedge clk) begin
@@ -77,11 +76,9 @@ always @(posedge clk) begin
 		interval <= q_interval;
 		curr_interval <= q_interval;
 		dir <= q_dir;
-		do_step <= 1;
 		queue_rd_en <= 1;
 	end else if (count == 0 && (running | start) && queue_empty) begin
 		running <= 0;
-		error <= 1;
 	end
 
 	if (count != 0) begin

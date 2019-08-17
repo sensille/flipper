@@ -215,7 +215,6 @@ endgenerate
  * stepdir
  */
 reg [31:0] stepdir_[NPWM];
-reg [31:0] step_min_stop_interval[NSTEPDIR];
 reg invert_step[NSTEPDIR];
 /*
  * queue is 72 bits wide:
@@ -226,11 +225,14 @@ localparam MOVE_TYPE_BITS = 3;
 localparam STEP_INTERVAL_BITS = 22;
 localparam STEP_COUNT_BITS = 26;
 localparam STEP_ADD_BITS = 20;
-reg [71:0] stepper_queue_wr_data;
-reg [NSTEPDIR-1:0] stepper_queue_wr_en = 0;
+reg [71:0] step_queue_wr_data;
+reg [NSTEPDIR-1:0] step_queue_wr_en = 0;
+wire [NSTEPDIR-1:0] step_queue_empty;
+wire [NSTEPDIR-1:0] step_running;
 reg [NSTEPDIR-1:0] step_next_dir = 0;
-wire [NSTEPDIR-1:0] step_error;
 reg [NSTEPDIR-1:0] step_start = 0;
+reg [NSTEPDIR-1:0] step_start_pending = 0;
+reg [31:0] step_start_clock [NSTEPDIR-1:0];
 genvar stepdir_gi;
 wire [31:0] step_position[NSTEPDIR];
 generate
@@ -244,13 +246,14 @@ generate
 			.MOVE_COUNT(MOVE_COUNT)
 		) u_stepdir (
 			.clk(clk),
-			.queue_wr_data(stepper_queue_wr_data),
-			.queue_wr_en(stepper_queue_wr_en[stepdir_gi]),
+			.queue_wr_data(step_queue_wr_data),
+			.queue_wr_en(step_queue_wr_en[stepdir_gi]),
+			.queue_empty(step_queue_empty[stepdir_gi]),
+			.running(step_running[stepdir_gi]),
 			.start(step_start[stepdir_gi]),
 			.reset(0),
 			.step(step[stepdir_gi]),
 			.dir(dir[stepdir_gi]),
-			.error(step_error[stepdir_gi]),
 			.position(step_position[stepdir_gi])
 		);
 	end
@@ -279,6 +282,7 @@ always @(posedge clk) begin
 		send_fifo_wr_en <= 0;
 	end
 	step_start <= 0;
+	step_queue_wr_en <= 0;
 	/*
 	 * channel all read/write to oids array here, so it
 	 * can be properly inferred as RAM
@@ -359,6 +363,10 @@ always @(posedge clk) begin
 			end
 		end else if (msg_state == MST_PARSE_ARG_START) begin
 			args[curr_arg] <= msg_data[6:0];
+			if (msg_data[6:5] == 2'b11) begin
+				/* negative value */
+				args[curr_arg][31:7] <= 25'b1111111111111111111111111;
+			end
 			if (msg_data[7]) begin
 				msg_state <= MST_PARSE_ARG_CONT;
 			end else begin
@@ -486,7 +494,7 @@ always @(posedge clk) begin
 				msg_state <= MST_SHUTDOWN;
 			end else begin
 				write_oid <= 1;
-				step_min_stop_interval[args[1][31:0]] <= args[3];
+				/* min_stop_interval ignored as it is not deemed useful */
 				invert_step[args[1][31:0]] <= args[4][0];
 				msg_state <= MST_IDLE;
 			end
@@ -511,6 +519,7 @@ always @(posedge clk) begin
 			/*
 			 * queue_step oid=%c interval=%u count=%hu add=%hi
 			 */
+			/* TODO: shutdown if queue is empty and no reset_step pending */
 			if (args[0] >= OID_MAX) begin
 				msg_state <= MST_SHUTDOWN;
 			end else if (oid2pin[OID_BITS-1:PIN_STEPDIR_BITS] !=
@@ -523,16 +532,20 @@ always @(posedge clk) begin
 			              args[3][31:STEP_ADD_BITS] != { (32-STEP_ADD_BITS) { 1'b1 }})) begin
 				/* parameters out of range */
 				msg_state <= MST_SHUTDOWN;
+			end else if (!step_running[oid2pin[PIN_STEPDIR_BITS-1:0]] &&
+			             !step_start_pending[oid2pin[PIN_STEPDIR_BITS-1:0]]) begin
+				/* "step in the future", queue underrun */
+				msg_state <= MST_SHUTDOWN;
 			end else begin
 				/* queue parameters to respective stepper queue */
-				stepper_queue_wr_data <= {
+				step_queue_wr_data <= {
 					MOVE_TYPE_KLIPPER,
 					step_next_dir[oid2pin[PIN_STEPDIR_BITS-1:0]],
 					args[1][STEP_INTERVAL_BITS-1:0],
 					args[2][STEP_COUNT_BITS-1:0],
 					args[3][STEP_ADD_BITS-1:0]
 				};
-				stepper_queue_wr_en[oid2pin[PIN_STEPDIR_BITS-1:0]] <= 1;
+				step_queue_wr_en[oid2pin[PIN_STEPDIR_BITS-1:0]] <= 1;
 				msg_state <= MST_IDLE;
 			end
 		end else if (msg_cmd == CMD_RESET_STEP_CLOCK) begin
@@ -545,9 +558,30 @@ always @(posedge clk) begin
 			             PIN_STEP_BASE[OID_BITS-1:PIN_STEPDIR_BITS]) begin
 				/* oid is not for stepdir */
 				msg_state <= MST_SHUTDOWN;
+			end else if (!step_queue_empty[oid2pin[PIN_STEPDIR_BITS-1:0]] ||
+			             step_running[oid2pin[PIN_STEPDIR_BITS-1:0]]) begin
+				/* queue is not empty */
+				msg_state <= MST_SHUTDOWN;
 			end begin
-				/* TODO */
-				step_start[oid2pin[OID_BITS-1:PIN_STEPDIR_BITS]] <= 1;
+				step_start_clock[oid2pin[PIN_STEPDIR_BITS-1:0]] <= args[1];
+				step_start_pending[oid2pin[PIN_STEPDIR_BITS-1:0]] <= 1;
+				msg_state <= MST_IDLE;
+			end
+		end else if (msg_cmd == CMD_SET_NEXT_STEP_DIR) begin
+			/*
+			 * set_next_step_dir oid=%c dir=%c
+			 */
+			if (args[0] >= OID_MAX) begin
+				msg_state <= MST_SHUTDOWN;
+			end else if (oid2pin[OID_BITS-1:PIN_STEPDIR_BITS] !=
+			             PIN_STEP_BASE[OID_BITS-1:PIN_STEPDIR_BITS]) begin
+				/* oid is not for stepdir */
+				msg_state <= MST_SHUTDOWN;
+			end else if (args[1][31:1] != 0) begin
+				/* argument out of range */
+				msg_state <= MST_SHUTDOWN;
+			end begin
+				step_next_dir[oid2pin[PIN_STEPDIR_BITS-1:0]] <= args[1][0];
 				msg_state <= MST_IDLE;
 			end
 		end else begin
@@ -615,6 +649,7 @@ always @(posedge clk) begin
 		msg_state <= MST_PARAM;
 	end else if (msg_state == MST_SHUTDOWN) begin
 		/* for now, just stay here */
+		is_shutdown <= 1;
 	/*
 	 * ---------------------------------
 	 * stage 4, encode and send response
@@ -686,6 +721,15 @@ always @(posedge clk) begin
 			pwm_on_ticks[i] <= pwm_next_on_ticks[i];
 			pwm_duration[i] <= pwm_max_duration[i];
 			pwm_scheduled[i] <= 0;
+		end
+	end
+	/*
+	 * reset_step_clock handling
+	 */
+	for (int i = 0; i < NSTEPDIR; i = i + 1) begin
+		if (step_start_pending[i] && clock == step_start_clock[i]) begin
+			step_start_pending[i] <= 0;
+			step_start[i] <= 1;
 		end
 	end
 end

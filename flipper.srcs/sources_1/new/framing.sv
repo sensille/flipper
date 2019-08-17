@@ -103,7 +103,7 @@ localparam RST_EOF = 3'd5;	/* read sync byte (end of frame) */
 localparam RST_NEED_SYNC = 3'd6;/* lost sync, error state */
 reg [2:0] recv_state = RST_SOF;
 
-assign cts = (recv_rptr == recv_temp_wptr + 1'b1);
+assign cts = (recv_rptr != recv_temp_wptr + 1'b1);
 
 reg send_acknak = 0;
 /*

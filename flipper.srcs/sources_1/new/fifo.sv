@@ -21,7 +21,7 @@ module fifo #(
 	// read side
 	output reg [DATA_WIDTH - 1 : 0] dout = 0,
 	input wire rd_en,
-	output wire empty,
+	output reg empty,
 
 	// status
 	output wire [ADDR_WIDTH - 1 : 0] elemcnt
@@ -36,7 +36,7 @@ reg [ADDR_WIDTH - 1 : 0] wrptr = 0;
 wire [ADDR_WIDTH - 1 : 0] next_rdptr = rdptr + 1;
 wire [ADDR_WIDTH - 1 : 0] next_wrptr = wrptr + 1;
 
-assign empty = wrptr == rdptr;
+wire _empty = wrptr == rdptr;
 assign full = next_wrptr == rdptr;
 assign elemcnt = wrptr - rdptr;
 
@@ -54,6 +54,8 @@ always @(posedge clk) begin
 			wrptr <= next_wrptr;
 		end
 	end
+	/* delay one slot to be in sync with output data */
+	empty <= _empty;
 end
 
 endmodule
