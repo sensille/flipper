@@ -9,7 +9,8 @@ module command #(
 	parameter MOVE_COUNT = 512,
 	parameter NGPIO = 4,
 	parameter NPWM = 6,
-	parameter NSTEPDIR = 6
+	parameter NSTEPDIR = 6,
+	parameter NENDSTOP = 8
 ) (
 	input wire clk,
 
@@ -42,6 +43,7 @@ module command #(
 	output wire [NPWM-1:0] pwm,
 	output wire [NSTEPDIR-1:0] step,
 	output wire [NSTEPDIR-1:0] dir,
+	input wire [NENDSTOP-1:0] endstop,
 
 	/*
 	 * debug
@@ -107,9 +109,15 @@ localparam MST_GET_CONFIG_2 = 10;
 localparam MST_GET_CONFIG_3 = 11;
 localparam MST_GET_CONFIG_4 = 12;
 localparam MST_GET_UPTIME_1 = 13;
-localparam MST_SHUTDOWN = 14;
+localparam MST_GET_STEPPER_POSITION_1 = 14;
+localparam MST_GET_ENDSTOP_STATE_1 = 15;
+localparam MST_GET_ENDSTOP_STATE_2 = 16;
+localparam MST_GET_ENDSTOP_STATE_3 = 17;
+localparam MST_ENDSTOP_SET_STEPPER_1 = 18;
+localparam MST_ENDSTOP_SET_STEPPER_2 = 19;
+localparam MST_SHUTDOWN = 31;
 
-reg [3:0] msg_state = 0;
+reg [4:0] msg_state = 0;
 reg [7:0] msg_cmd = 0;	/* TODO: correct size */
 localparam MAX_ARGS = 8;
 localparam ARGS_BITS = $clog2(MAX_ARGS);
@@ -144,7 +152,7 @@ localparam PIN_PWM_BITS = 4;
 localparam PIN_PWM_NUM = NPWM;
 localparam PIN_ENDSTOP_BASE = 112;
 localparam PIN_ENDSTOP_BITS = 4;
-localparam PIN_ENDSTOP_NUM = 8;
+localparam PIN_ENDSTOP_NUM = NENDSTOP;
 localparam PIN_MAX = 128;
 localparam PIN_BITS = $clog2(PIN_MAX);
 localparam OID_MAX = PIN_MAX;
@@ -231,6 +239,7 @@ wire [NSTEPDIR-1:0] step_queue_empty;
 wire [NSTEPDIR-1:0] step_running;
 reg [NSTEPDIR-1:0] step_next_dir = 0;
 reg [NSTEPDIR-1:0] step_start = 0;
+reg [NSTEPDIR-1:0] step_reset = 0;
 reg [NSTEPDIR-1:0] step_start_pending = 0;
 reg [31:0] step_start_clock [NSTEPDIR-1:0];
 genvar stepdir_gi;
@@ -251,13 +260,47 @@ generate
 			.queue_empty(step_queue_empty[stepdir_gi]),
 			.running(step_running[stepdir_gi]),
 			.start(step_start[stepdir_gi]),
-			.reset(0),
+			.reset(step_reset[stepdir_gi]),
 			.step(step[stepdir_gi]),
 			.dir(dir[stepdir_gi]),
 			.position(step_position[stepdir_gi])
 		);
 	end
 endgenerate
+
+/*
+ * endstops
+ */
+reg [NENDSTOP-1:0] endstop_homing = 0;
+reg [NSTEPDIR-1:0] endstop_stepper[NENDSTOP-1:0];
+reg [31:0] endstop_clock[NENDSTOP-1:0];
+reg [15:0] endstop_sample_ticks[NENDSTOP-1:0];	/* hardcoded max */
+reg [5:0] endstop_sample_count[NENDSTOP-1:0];
+reg [15:0] endstop_tick_cnt[NENDSTOP-1:0];
+reg [5:0] endstop_sample_cnt[NENDSTOP-1:0];
+reg endstop_pin_value[NENDSTOP];
+reg [NSTEPDIR-1:0] endstop_step_reset[NENDSTOP-1:0];
+reg [NENDSTOP-1:0] endstop_send_state = 0;
+reg [OID_BITS-1:0] endstop_oid [NENDSTOP-1:0];
+localparam ES_IDLE = 0;
+localparam ES_WAIT_FOR_CLOCK = 1;
+localparam ES_REST = 2;
+localparam ES_SAMPLE = 3;
+reg [1:0] endstop_state[NENDSTOP-1:0];
+initial begin
+	for (int i = 0; i < NENDSTOP; i = i + 1) begin
+		endstop_stepper[i] <= 0;
+		endstop_step_reset[i] <= { NSTEPDIR { 1'b0 }};
+	end
+end
+always @(*) begin
+	step_reset = 0;
+	for (int i = 0; i < NENDSTOP; i = i + 1) begin
+		if (endstop_step_reset[i]) begin
+			step_reset |= endstop_stepper[i];
+		end
+	end
+end
 
 localparam MAX_PARAMS = 8;
 localparam PARAM_BITS = $clog2(MAX_PARAMS);
@@ -269,6 +312,10 @@ reg [2:0] curr_cnt;	/* counter for VLQ */
 reg [7:0] rsp_len;
 reg [PIN_BITS-1:0] oid2pin = 0;
 reg write_oid = 0;
+reg oid2pin_arg2 = 0;
+reg [PIN_ENDSTOP_BITS-1:0] endstop_tmp = 0; /* tmp storage for endstop_set_stepper */
+reg [PIN_ENDSTOP_BITS-1:0] _endstop_send_ix;
+reg [OID_BITS-1:0] _endstop_send_oid;
 
 always @(posedge clk) begin
 	reg _arg_end;
@@ -290,6 +337,9 @@ always @(posedge clk) begin
 	if (write_oid) begin
 		oids[args[0][OID_BITS-1:0]] <= { 1'b1, args[1][OID_BITS-1:0] };
 		write_oid <= 0;
+	end else if (oid2pin_arg2) begin
+		oid2pin <= oids[args[2][OID_BITS-1:0]];
+		oid2pin_arg2 <= 0;
 	end else begin
 		oid2pin <= oids[args[0][OID_BITS-1:0]];
 	end
@@ -510,8 +560,13 @@ always @(posedge clk) begin
 			end else if (args[1][PIN_STEPDIR_BITS-1:0] >= PIN_ENDSTOP_NUM) begin
 				/* pin out of range */
 				msg_state <= MST_SHUTDOWN;
+			end else if (args[3] >= NSTEPDIR) begin
+				/* can't stop more steppers than we have */
+				msg_state <= MST_SHUTDOWN;
 			end else begin
 				write_oid <= 1;
+				/* save oid for endstop_state message */
+				endstop_oid[args[1][PIN_ENDSTOP_BITS-1:0]] <= args[0];
 				/* ignore parameters */
 				msg_state <= MST_IDLE;
 			end
@@ -584,6 +639,91 @@ always @(posedge clk) begin
 				step_next_dir[oid2pin[PIN_STEPDIR_BITS-1:0]] <= args[1][0];
 				msg_state <= MST_IDLE;
 			end
+		end else if (msg_cmd == CMD_STEPPER_GET_POSITION) begin
+			/*
+			 * stepper_get_position oid=%c
+			 */
+			if (args[0] >= OID_MAX) begin
+				msg_state <= MST_SHUTDOWN;
+			end else if (oid2pin[OID_BITS-1:PIN_STEPDIR_BITS] !=
+			             PIN_STEP_BASE[OID_BITS-1:PIN_STEPDIR_BITS]) begin
+				/* oid is not for stepdir */
+				msg_state <= MST_SHUTDOWN;
+			end begin
+				send_ring_data <= RSP_STEPPER_POSITION;
+				send_ring_wr_en <= 1;
+				rsp_len <= 1;
+				params[0] <= args[0];
+				msg_state <= MST_GET_STEPPER_POSITION_1;
+			end
+		end else if (msg_cmd == CMD_ENDSTOP_QUERY_STATE) begin
+			/*
+			 * endstop_query_state oid=%c
+			 */
+			if (args[0] >= OID_MAX) begin
+				msg_state <= MST_SHUTDOWN;
+			end else if (oid2pin[OID_BITS-1:PIN_ENDSTOP_BITS] !=
+			             PIN_ENDSTOP_BASE[OID_BITS-1:PIN_ENDSTOP_BITS]) begin
+				/* oid is not for endstop */
+				msg_state <= MST_SHUTDOWN;
+			end begin
+				_endstop_send_oid <= args[0];
+				_endstop_send_ix <= oid2pin[PIN_ENDSTOP_BITS-1:0];
+				msg_state <= MST_GET_ENDSTOP_STATE_1;
+			end
+		end else if (msg_cmd == CMD_ENDSTOP_SET_STEPPER) begin
+			/*
+			 * endstop_set_stepper oid=%c pos=%c stepper_oid=%c
+			 */
+			if (args[0] >= OID_MAX) begin
+				msg_state <= MST_SHUTDOWN;
+			end else if (oid2pin[OID_BITS-1:PIN_ENDSTOP_BITS] !=
+			             PIN_ENDSTOP_BASE[OID_BITS-1:PIN_ENDSTOP_BITS]) begin
+				/* oid is not for endstop */
+				msg_state <= MST_SHUTDOWN;
+			end else if (args[1] >= NSTEPDIR) begin
+				/* pos out of range */
+				msg_state <= MST_SHUTDOWN;
+			end else if (args[2] >= OID_MAX) begin
+				msg_state <= MST_SHUTDOWN;
+			end begin
+				/* resolve stepper oid */
+				oid2pin_arg2 <= 1;
+				endstop_tmp <= oid2pin[PIN_ENDSTOP_BITS-1:0];
+				msg_state <= MST_ENDSTOP_SET_STEPPER_1;
+			end
+		end else if (msg_cmd == CMD_ENDSTOP_HOME) begin
+			/*
+			 * endstop_home oid=%c clock=%u sample_ticks=%u sample_count=%c rest_ticks=%u pin_value=%c
+			 */
+			if (args[0] >= OID_MAX) begin
+				msg_state <= MST_SHUTDOWN;
+			end else if (oid2pin[OID_BITS-1:PIN_ENDSTOP_BITS] !=
+			             PIN_ENDSTOP_BASE[OID_BITS-1:PIN_ENDSTOP_BITS]) begin
+				/* oid is not for endstop */
+				msg_state <= MST_SHUTDOWN;
+			end if (args[2] > 65535) begin
+				/* max sample_ticks exceeped */
+				msg_state <= MST_SHUTDOWN;
+			end if (args[3] > 31) begin
+				/* max sample_count exceeped */
+				msg_state <= MST_SHUTDOWN;
+			end if (args[5] > 1) begin
+				/* invalid pin value */
+				msg_state <= MST_SHUTDOWN;
+			end if (args[3] == 0) begin
+				/* cancel homing operation */
+				endstop_homing[oid2pin[PIN_ENDSTOP_BITS-1:0]] <= 0;
+			end else begin
+				endstop_clock[oid2pin[PIN_ENDSTOP_BITS-1:0]] <= args[1];
+				endstop_sample_ticks[oid2pin[PIN_ENDSTOP_BITS-1:0]] <= args[2];
+				endstop_sample_count[oid2pin[PIN_ENDSTOP_BITS-1:0]] <= args[3];
+				/* rest ticks are ignored */
+				endstop_pin_value[oid2pin[PIN_ENDSTOP_BITS-1:0]] <= args[5];
+				endstop_homing[oid2pin[PIN_ENDSTOP_BITS-1:0]] <= 1;
+				endstop_state[oid2pin[PIN_ENDSTOP_BITS-1:0]] <= ES_WAIT_FOR_CLOCK;
+				msg_state <= MST_IDLE;
+			end
 		end else begin
 			msg_state <= MST_IDLE;
 		end
@@ -647,6 +787,35 @@ always @(posedge clk) begin
 		params[1] <= clock[31:0];
 		nparams <= 2;
 		msg_state <= MST_PARAM;
+	end else if (msg_state == MST_GET_STEPPER_POSITION_1) begin
+		params[1] <= step_position[oid2pin[PIN_STEPDIR_BITS-1:0]];
+		nparams <= 2;
+		msg_state <= MST_PARAM;
+	end else if (msg_state == MST_GET_ENDSTOP_STATE_1) begin
+		send_ring_data <= RSP_ENDSTOP_STATE;
+		send_ring_wr_en <= 1;
+		rsp_len <= 1;
+		params[0] <= _endstop_send_oid;
+		msg_state <= MST_GET_ENDSTOP_STATE_2;
+	end else if (msg_state == MST_GET_ENDSTOP_STATE_2) begin
+		params[1] <= endstop_homing[_endstop_send_ix];
+		msg_state <= MST_GET_ENDSTOP_STATE_3;
+	end else if (msg_state == MST_GET_ENDSTOP_STATE_3) begin
+		params[2] <= endstop[_endstop_send_ix];
+		nparams <= 3;
+		msg_state <= MST_PARAM;
+	end else if (msg_state == MST_ENDSTOP_SET_STEPPER_1) begin
+		/* need one more clock to resolve stepper oid */
+		msg_state <= MST_ENDSTOP_SET_STEPPER_2;
+	end else if (msg_state == MST_ENDSTOP_SET_STEPPER_2) begin
+		if (oid2pin[OID_BITS-1:PIN_STEPDIR_BITS] !=
+			     PIN_STEP_BASE[OID_BITS-1:PIN_STEPDIR_BITS]) begin
+			/* oid is not for stepdir */
+			msg_state <= MST_SHUTDOWN;
+		end else begin
+			endstop_stepper[endstop_tmp][oid2pin[PIN_STEPDIR_BITS-1:0]] <= 1;
+			msg_state <= MST_IDLE;
+		end
 	end else if (msg_state == MST_SHUTDOWN) begin
 		/* for now, just stay here */
 		is_shutdown <= 1;
@@ -701,6 +870,24 @@ always @(posedge clk) begin
 		rsp_len <= rsp_len + 1;
 		curr_cnt <= curr_cnt - 1;
 		rcv_param <= { rcv_param[27:0], 7'b0 };
+	/*
+	 * ------------------------------
+	 * stage 5, send involuntary data
+	 * ------------------------------
+	 *
+	 * only send when state machine is idle and no msg has
+	 * been pulled at stage 1
+	 */
+	end else if (!msg_ready && msg_state == MST_IDLE) begin
+		for (int i = 0; i < NENDSTOP; i = i + 1) begin
+			if (endstop_send_state[i]) begin
+				endstop_send_state[i] <= 0;
+				_endstop_send_oid <= endstop_oid[i];
+				_endstop_send_ix <= i;
+				msg_state <= MST_GET_ENDSTOP_STATE_1;
+				break;
+			end
+		end
 	end
 	/*
 	 * pwm duration safety feature. Must be before state
@@ -730,6 +917,43 @@ always @(posedge clk) begin
 		if (step_start_pending[i] && clock == step_start_clock[i]) begin
 			step_start_pending[i] <= 0;
 			step_start[i] <= 1;
+		end
+	end
+	/*
+	 * endstop homing engine
+	 */
+	for (int i = 0; i < NENDSTOP; i = i + 1) begin
+		if (endstop_homing[i]) begin
+			if (endstop_state[i] == ES_WAIT_FOR_CLOCK) begin
+				if (endstop_clock[i] == clock) begin
+					endstop_state[i] <= ES_REST;
+				end
+			end else if (endstop_state[i] == ES_REST) begin
+				if (endstop[i] == endstop_pin_value[i]) begin
+					endstop_state[i] <= ES_SAMPLE;
+					endstop_tick_cnt[i] <= endstop_sample_ticks[i];
+					endstop_sample_cnt[i] <= endstop_sample_count[i];
+				end
+			end else if (endstop_state[i] == ES_SAMPLE) begin
+				if (endstop_tick_cnt[i] == 1) begin
+					if (endstop[i] != endstop_pin_value[i]) begin
+						endstop_state[i] <= ES_REST;
+					end else begin
+						if (endstop_sample_cnt[i] == 1) begin
+							/* endstop triggered */
+							endstop_homing[i] <= 0;
+							/* reset stepper */
+							endstop_step_reset[i] <= 1;
+							/* send endstop_state */
+							endstop_send_state[i] <= 1;
+						end else begin
+							endstop_sample_cnt[i] <= endstop_sample_cnt[i] - 1;
+						end
+					end
+				end else begin
+					endstop_tick_cnt[i] <= endstop_tick_cnt[i] - 1;
+				end
+			end
 		end
 	end
 end

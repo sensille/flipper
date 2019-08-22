@@ -104,6 +104,12 @@ always @(posedge clk) begin
 	end else begin
 		step <= 0;
 	end
+
+	if (reset) begin
+		do_step <= 0;
+		step <= 0;
+		running <= 0;
+	end
 end
 
 endmodule

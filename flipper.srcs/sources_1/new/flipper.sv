@@ -3,7 +3,8 @@
 
 module flipper #(
 	parameter NENDSTOP = 8,
-	parameter BAUD = 250000
+	parameter BAUD = 250000,
+	parameter NSTEPDIR = 6
 ) (
 	input wire clk_50mhz,
 
@@ -21,8 +22,8 @@ module flipper #(
 	output wire cs456,
 	output wire sdi,
 	input wire sdo,
-	output wire [5:0] dir,
-	output wire [5:0] step,
+	output wire [NSTEPDIR-1:0] dir,
+	output wire [NSTEPDIR-1:0] step,
 
 	// endstops
 	input wire [NENDSTOP-1:0] endstop,
@@ -129,7 +130,9 @@ command #(
 	.LEN_FIFO_BITS(LEN_FIFO_BITS),
         .CMD_ACKNAK(CMD_ACKNAK),
 	.NGPIO(NGPIO),
-	.NPWM(NPWM)
+	.NPWM(NPWM),
+	.NSTEPDIR(NSTEPDIR),
+	.NENDSTOP(NENDSTOP)
 ) u_command (
 	.clk(clk),
 
@@ -160,6 +163,7 @@ command #(
 	.pwm(pwm),
 	.step(step),
 	.dir(dir),
+	.endstop(endstop),
 
 	.debug(cmd_debug)
 );

@@ -110,7 +110,7 @@ integer len;
 input [7:0] data [];
 begin: send_packet_task
 	integer i;
-	static reg [15:0] crc16 = 16'hffff;
+	automatic reg [15:0] crc16 = 16'hffff;
 
 	send(len + 5);
 	update_crc(crc16, len + 5);
@@ -211,10 +211,32 @@ initial begin: B_serial_data
 		16,	// min_stop_interval=16
 		0 	// invert_step=0=16
 	} );
+	send_encoded( 5, {
+		16, 	// config_endstop
+		2,	// oid
+		112,	// ES0
+		0,	// pull_up
+		1	// stepper_count
+	} );
+	send_encoded( 4, {
+		20, 	// endstop_set_stepper
+		2,	// oid
+		0,	// pos
+		1	// stepper_oid
+	} );
 	send_encoded( 3, {
 		25, 	// reset_step_clock
 		1,	// oid
-		'h4800	// clock
+		'h9800	// clock
+	} );
+	send_encoded( 7, {
+		17, 	// endstop_home
+		1,	// oid
+		'h9800,	// clock
+		20,	// sample_ticks
+		3,	// sample_count
+		111,	// rest_ticks (ignored)
+		1	// pin_value
 	} );
 	send_encoded( 5, {
 		21, 	// queue_step
@@ -235,6 +257,7 @@ initial begin: B_serial_data
 		32,	// count
 		-2	// add
 	} );
+	endstop[0] = 1;
 	#(BITLENGTH * 200);
 	send_encoded( 2, {
 		22, 	// stepper_get_position
