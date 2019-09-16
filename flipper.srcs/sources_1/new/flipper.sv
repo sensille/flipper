@@ -63,10 +63,6 @@ clk u_clk(
 
 assign hotend = 0;
 assign bed = 0;
-assign sck = 0;
-assign cs123 = 1;
-assign cs456 = 1;
-assign sdi = 0;
 
 wire [7:0] msg_data;
 wire msg_ready;
@@ -132,7 +128,9 @@ command #(
 	.NGPIO(NGPIO),
 	.NPWM(NPWM),
 	.NSTEPDIR(NSTEPDIR),
-	.NENDSTOP(NENDSTOP)
+	.NENDSTOP(NENDSTOP),
+	.NSPI(1),
+	.NCS(2)
 ) u_command (
 	.clk(clk),
 
@@ -164,6 +162,10 @@ command #(
 	.step(step),
 	.dir(dir),
 	.endstop(endstop),
+	.msck(sck),
+	.mosi(sdi),
+	.miso(sdo),
+	.mcsn({ cs456, cs123 }),
 
 	.debug(cmd_debug)
 );

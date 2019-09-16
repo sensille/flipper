@@ -18,7 +18,11 @@
       "queue_step oid=%c interval=%u count=%hu add=%hi":21,
       "stepper_get_position oid=%c":22,
       "set_next_step_dir oid=%c dir=%c":24,
-      "reset_step_clock oid=%c clock=%u":25
+      "reset_step_clock oid=%c clock=%u":25,
+      "spi_set_bus oid=%c spi_bus=%u mode=%u rate=%u":26,
+      "config_spi oid=%c pin=%u":27,
+      "spi_send oid=%c data=%*s":28,
+      "spi_transfer oid=%c data=%*s":29
    },
    "responses":{  
       "identify_response offset=%u data=%.*s":0,
@@ -28,7 +32,8 @@
       "is_shutdown static_string_id=%hu":9,
       "shutdown clock=%u static_string_id=%hu":10,
       "endstop_state oid=%c homing=%c pin_value=%c":19,
-      "stepper_position oid=%c pos=%i":23
+      "stepper_position oid=%c pos=%i":23,
+      "spi_transfer_response oid=%c response=%*s":30
    },
    "config":{  
       "CLOCK_FREQ":20000000,
@@ -38,9 +43,7 @@
    "enumerations":{  
       "pin":{  
          "GPIO0":[ 0, 4 ],
-         "SCK":32,
-         "SDI":33,
-         "SDO":34,
+         "SPI0":[ 32, 2 ],
          "CS0":[ 48, 2 ],
          "DIR0":[ 64, 6 ],
          "STEP0":[ 80, 6 ],

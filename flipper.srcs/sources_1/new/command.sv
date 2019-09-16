@@ -10,7 +10,9 @@ module command #(
 	parameter NGPIO = 4,
 	parameter NPWM = 6,
 	parameter NSTEPDIR = 6,
-	parameter NENDSTOP = 8
+	parameter NENDSTOP = 8,
+	parameter NSPI = 2,
+	parameter NCS = 5
 ) (
 	input wire clk,
 
@@ -44,6 +46,10 @@ module command #(
 	output wire [NSTEPDIR-1:0] step,
 	output wire [NSTEPDIR-1:0] dir,
 	input wire [NENDSTOP-1:0] endstop,
+	output reg [NSPI-1:0] msck = 0,
+	output reg [NSPI-1:0] mosi = 0,
+	input wire [NSPI-1:0] miso,
+	output reg [NCS-1:0] mcsn = { NCS { 1'b1 }},
 
 	/*
 	 * debug
@@ -75,6 +81,12 @@ localparam CMD_STEPPER_GET_POSITION = 22;
 localparam RSP_STEPPER_POSITION = 23;
 localparam CMD_SET_NEXT_STEP_DIR = 24;
 localparam CMD_RESET_STEP_CLOCK = 25;
+localparam CMD_SPI_SET_BUS = 26;
+localparam CMD_CONFIG_SPI = 27;
+localparam CMD_SPI_SEND = 28;
+localparam CMD_SPI_TRANSFER = 29;
+localparam RSP_SPI_TRANSFER = 30;
+
 /*
       "allocate_oids count=%c":12,
       "config_soft_pwm_out oid=%c pin=%u cycle_ticks=%u value=%c default_value=%c max_duration=%u":13,
@@ -93,6 +105,11 @@ localparam CMD_RESET_STEP_CLOCK = 25;
       "endstop_state oid=%c homing=%c pin_value=%c":19,
       "stepper_position oid=%c pos=%i":23
 
+      "spi_set_bus oid=%c spi_bus=%u mode=%u rate=%u":26,
+      "config_spi oid=%c pin=%u":27,
+      "spi_send oid=%c data=%*s":29,
+      "spi_transfer oid=%c data=%*s":30
+      "spi_transfer_response oid=%c response=%*s":31
 */
 
 localparam MST_IDLE = 0;
@@ -115,6 +132,14 @@ localparam MST_GET_ENDSTOP_STATE_2 = 16;
 localparam MST_GET_ENDSTOP_STATE_3 = 17;
 localparam MST_ENDSTOP_SET_STEPPER_1 = 18;
 localparam MST_ENDSTOP_SET_STEPPER_2 = 19;
+localparam MST_STRING_START = 20;
+localparam MST_STRING_ARG = 21;
+localparam MST_SPI_TRANSFER_1 = 22;
+localparam MST_SPI_TRANSFER_SEND = 23;
+localparam MST_SPI_TRANSFER_CLK_LO = 24;
+localparam MST_SPI_TRANSFER_CLK_HI = 25;
+localparam MST_SPI_TRANSFER_END = 26;
+localparam MST_PARAM_END = 27;
 localparam MST_SHUTDOWN = 31;
 
 reg [4:0] msg_state = 0;
@@ -126,7 +151,7 @@ reg [ARGS_BITS-1:0] curr_arg = 0;
 reg [ARGS_BITS-1:0] nargs = 0;
 
 
-localparam IDENTIFY_LEN = 551;
+localparam IDENTIFY_LEN = 792;
 localparam IDENTIFY_LEN_BITS = $clog2(IDENTIFY_LEN);
 
 /*
@@ -137,12 +162,12 @@ localparam IDENTIFY_LEN_BITS = $clog2(IDENTIFY_LEN);
 localparam PIN_GPIO_BASE = 0;
 localparam PIN_GPIO_BITS = 5;
 localparam PIN_GPIO_NUM = NGPIO;
-localparam PIN_SCK = 32;
-localparam PIN_SDI = 33;
-localparam PIN_SDO = 34;
+localparam PIN_SPI_BASE = 32;
+localparam PIN_SPI_BITS = 4;
+localparam PIN_SPI_NUM = NSPI;
 localparam PIN_CS_BASE = 48;
 localparam PIN_CS_BITS = 4;
-localparam PIN_CS_NUM = 2;
+localparam PIN_CS_NUM = NCS;
 localparam PIN_DIR_BASE = 64;
 localparam PIN_STEP_BASE = 80;
 localparam PIN_STEPDIR_BITS = 4;
@@ -171,12 +196,17 @@ initial begin
 	$readmemh("identify.mem", identify_mem);
 end
 
+/* shutdown reasons */
+localparam SR_BAD_PIN = 1;
+localparam SR_PIN_OUT_OF_RANGE = 2;
+
 /*
  * global state
  */
 reg [31:0] config_crc = 0;
 reg is_finalized = 0;
 reg is_shutdown = 0;
+reg [7:0] shutdown_reason = 0;
 
 /* gpio */
 reg [NGPIO-1:0] gpio_out = 0;
@@ -302,6 +332,18 @@ always @(*) begin
 	end
 end
 
+/*
+ * spi
+ * spi parameters are stored per cs
+ */
+reg [31:0] spi_rate[NCS];
+reg [PIN_SPI_BITS-1:0] spi_bus[NCS];
+reg [30:0] spi_cnt = 0;
+reg [2:0] spi_bits = 0;
+reg [5:0] spi_bytes = 0;
+reg [7:0] spi_data_out = 0;
+reg [7:0] spi_data_in = 0;
+
 localparam MAX_PARAMS = 8;
 localparam PARAM_BITS = $clog2(MAX_PARAMS);
 reg [31:0] params [MAX_PARAMS];
@@ -316,6 +358,15 @@ reg oid2pin_arg2 = 0;
 reg [PIN_ENDSTOP_BITS-1:0] endstop_tmp = 0; /* tmp storage for endstop_set_stepper */
 reg [PIN_ENDSTOP_BITS-1:0] _endstop_send_ix;
 reg [OID_BITS-1:0] _endstop_send_oid;
+reg string_arg = 0;
+/* assume max string is 64 */
+reg [5:0] str_pos = 0;
+reg [5:0] str_len = 0;
+reg [7:0] str_buf[64];
+
+/* shorthands */
+wire [PIN_CS_BITS-1:0] spi_cs_r = oid2pin[PIN_CS_BITS-1:0];
+wire [PIN_SPI_BITS-1:0] spi_bus_r = spi_bus[spi_cs_r];
 
 always @(posedge clk) begin
 	reg _arg_end;
@@ -410,6 +461,20 @@ always @(posedge clk) begin
 			end else if (msg_data == CMD_RESET_STEP_CLOCK) begin
 				msg_state <= MST_PARSE_ARG_START;
 				nargs <= 2;
+			end else if (msg_data == CMD_SPI_SET_BUS) begin
+				msg_state <= MST_PARSE_ARG_START;
+				nargs <= 4;
+			end else if (msg_data == CMD_CONFIG_SPI) begin
+				msg_state <= MST_PARSE_ARG_START;
+				nargs <= 2;
+			end else if (msg_data == CMD_SPI_SEND) begin
+				msg_state <= MST_PARSE_ARG_START;
+				nargs <= 2;
+				string_arg <= 1;
+			end else if (msg_data == CMD_SPI_TRANSFER) begin
+				msg_state <= MST_PARSE_ARG_START;
+				nargs <= 2;
+				string_arg <= 1;
 			end
 		end else if (msg_state == MST_PARSE_ARG_START) begin
 			args[curr_arg] <= msg_data[6:0];
@@ -427,6 +492,18 @@ always @(posedge clk) begin
 			if (!msg_data[7]) begin
 				_arg_end = 1;
 			end
+		end else if (msg_state == MST_STRING_START) begin
+			string_arg <= 0;
+			str_pos <= 0;
+			str_len <= args[curr_arg - 1];
+			msg_state <= MST_STRING_ARG;
+			msg_rd_en <= 0;	/* no read in this clock */
+		end else if (msg_state == MST_STRING_ARG) begin
+			str_buf[str_pos] <= msg_data;
+			str_pos <= str_pos + 1;
+			if (str_len == str_pos + 1) begin
+				msg_state <= MST_DISPATCH;
+			end
 		end else begin
 			/* we're in some of the states below */
 			msg_rd_en <= 0;	/* we're in some of the states below */
@@ -434,7 +511,11 @@ always @(posedge clk) begin
 		if (_arg_end) begin
 			curr_arg <= curr_arg + 1;
 			if (curr_arg + 1 == nargs) begin
-				msg_state <= MST_DISPATCH;
+				if (string_arg) begin
+					msg_state <= MST_STRING_START;
+				end else begin
+					msg_state <= MST_DISPATCH;
+				end
 			end else begin
 				msg_state <= MST_PARSE_ARG_START;
 			end
@@ -724,6 +805,66 @@ always @(posedge clk) begin
 				endstop_state[oid2pin[PIN_ENDSTOP_BITS-1:0]] <= ES_WAIT_FOR_CLOCK;
 				msg_state <= MST_IDLE;
 			end
+		end else if (msg_cmd == CMD_CONFIG_SPI) begin
+			/*
+			 * config_spi oid=%c pin=%u
+			 */
+			if (args[0] >= OID_MAX) begin
+				msg_state <= MST_SHUTDOWN;
+			end else if (args[1][31:PIN_CS_BITS] != PIN_CS_BASE[31:PIN_CS_BITS]) begin
+				/* no cs pin */
+				shutdown_reason <= SR_BAD_PIN;
+				msg_state <= MST_SHUTDOWN;
+			end else if (args[1][PIN_CS_BITS-1:0] >= PIN_CS_NUM) begin
+				/* cs pin out of range */
+				shutdown_reason <= SR_PIN_OUT_OF_RANGE;
+				msg_state <= MST_SHUTDOWN;
+			end else begin
+				write_oid <= 1;
+				msg_state <= MST_IDLE;
+			end
+		end else if (msg_cmd == CMD_SPI_SET_BUS) begin
+			/*
+			 * spi_set_bus oid=%c spi_bus=%u mode=%u rate=%u
+			 */
+			if (args[0] >= OID_MAX) begin
+				msg_state <= MST_SHUTDOWN;
+			end else if (oid2pin[OID_BITS-1:PIN_CS_BITS] !=
+			             PIN_CS_BASE[OID_BITS-1:PIN_CS_BITS]) begin
+				/* no cs oid */
+				msg_state <= MST_SHUTDOWN;
+			end else if (args[1][31:PIN_SPI_BITS] != PIN_SPI_BASE[31:PIN_SPI_BITS]) begin
+				/* no spi bus */
+				msg_state <= MST_SHUTDOWN;
+			end else if (args[1][PIN_SPI_BITS-1:0] >= PIN_SPI_NUM) begin
+				/* spi bus out of range */
+				msg_state <= MST_SHUTDOWN;
+			end else if (args[2] != 3) begin
+				/* only mode 3 supported */
+				msg_state <= MST_SHUTDOWN;
+			end else begin
+				spi_rate[oid2pin[PIN_CS_BITS-1:0]] <= args[3];
+				spi_bus[oid2pin[PIN_CS_BITS-1:0]] <= args[1][PIN_SPI_BITS-1:0];
+				msg_state <= MST_IDLE;
+			end
+		end else if (msg_cmd == CMD_SPI_TRANSFER ||
+		             msg_cmd == CMD_SPI_SEND) begin
+			/*
+			 * spi_transfer oid=%c data=%*s
+			 * spi_send oid=%c data=%*s
+			 */
+			if (args[0] >= OID_MAX) begin
+				msg_state <= MST_SHUTDOWN;
+			end else if (oid2pin[OID_BITS-1:PIN_CS_BITS] !=
+			             PIN_CS_BASE[OID_BITS-1:PIN_CS_BITS]) begin
+				/* no cs oid */
+				msg_state <= MST_SHUTDOWN;
+			end else begin
+				msg_state <= MST_SPI_TRANSFER_1;
+			end
+/*
+      "spi_transfer_response oid=%c response=%*s":31
+ */
 		end else begin
 			msg_state <= MST_IDLE;
 		end
@@ -816,6 +957,71 @@ always @(posedge clk) begin
 			endstop_stepper[endstop_tmp][oid2pin[PIN_STEPDIR_BITS-1:0]] <= 1;
 			msg_state <= MST_IDLE;
 		end
+	end else if (msg_state == MST_SPI_TRANSFER_1) begin
+		if (msg_cmd == CMD_SPI_TRANSFER) begin
+			/* transfer cmd/oid/len first, then continue to data */
+			params[0] <= args[0];	/* echo oid */
+			params[1] <= args[1];	/* send len == rcv len*/
+			nparams <= 2;
+			send_ring_data <= RSP_SPI_TRANSFER;
+			send_ring_wr_en <= 1;
+			rsp_len <= 1;
+			msg_state <= MST_PARAM;
+		end else begin
+			/* nothing to send, go to data phase directly */
+			msg_state <= MST_SPI_TRANSFER_SEND;
+		end
+		/*
+		 * msck needs to be 1 for at least 10ns before CS goes low.
+		 * As we run with 20MHz, the condition is met with one cycle
+		 */
+		msck[spi_bus_r] <= 1;
+	end else if (msg_state == MST_SPI_TRANSFER_SEND) begin
+		mcsn[spi_cs_r] <= 0;
+		spi_cnt <= 0;
+		spi_bits <= 0;
+		spi_bytes <= 0;
+		spi_data_out <= str_buf[0];
+		msg_state <= MST_SPI_TRANSFER_CLK_HI;
+	end else if (msg_state == MST_SPI_TRANSFER_CLK_HI) begin
+		if (spi_cnt + 1 != spi_rate[spi_cs_r][30:1]) begin
+			spi_cnt <= spi_cnt + 1;
+		end else begin
+			spi_cnt <= 0;
+			msck[spi_bus_r] <= 0;
+			mosi[spi_bus_r] <= spi_data_out[0];
+			spi_data_out <= { 1'b0, spi_data_out[7:1] };
+			msg_state <= MST_SPI_TRANSFER_CLK_LO;
+		end
+	end else if (msg_state == MST_SPI_TRANSFER_CLK_LO) begin
+		if (spi_cnt + 1 != spi_rate[spi_cs_r][30:1]) begin
+			spi_cnt <= spi_cnt + 1;
+		end else begin
+			spi_cnt <= 0;
+			msck[spi_bus_r] <= 1;
+			spi_data_in <= { spi_data_in[6:0], miso[spi_bus_r] };
+			spi_bits <= spi_bits + 1;
+			msg_state <= MST_SPI_TRANSFER_CLK_HI;
+			if (spi_bits == 7) begin
+				spi_data_out <= str_buf[spi_bytes + 1];
+				if (msg_cmd == CMD_SPI_TRANSFER) begin
+					send_ring_data <= { spi_data_in[6:0], miso[spi_bus_r] };
+					send_ring_wr_en <= 1;
+					rsp_len <= rsp_len + 1;
+				end
+				spi_bytes <= spi_bytes + 1;
+				if (spi_bytes + 1 == args[1]) begin
+					msg_state <= MST_SPI_TRANSFER_END;
+				end
+			end
+		end
+	end else if (msg_state == MST_SPI_TRANSFER_END) begin
+		mcsn[spi_cs_r] <= 1;
+		if (msg_cmd == CMD_SPI_TRANSFER) begin
+			send_fifo_data <= rsp_len;
+			send_fifo_wr_en <= 1;
+		end
+		msg_state <= MST_IDLE;
 	end else if (msg_state == MST_SHUTDOWN) begin
 		/* for now, just stay here */
 		is_shutdown <= 1;
@@ -856,6 +1062,8 @@ always @(posedge clk) begin
 				msg_state <= MST_PARAM;
 			end else if (msg_cmd == CMD_IDENTIFY) begin
 				msg_state <= MST_IDENTIFY_SEND;
+			end else if (msg_cmd == CMD_SPI_TRANSFER) begin
+				msg_state <= MST_SPI_TRANSFER_SEND;
 			end else begin
 				send_fifo_data <= rsp_len + 1;
 				send_fifo_wr_en <= 1;
